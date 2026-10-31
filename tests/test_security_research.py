@@ -106,7 +106,7 @@ def test_kaggle_bundle():
     source = script.read_text(encoding="utf-8")
     assert "base = sys.modules[\"__main__\"]" in source
     assert "def start_llama(" in source and "def run_research_agent(" in source
-    assert 'if __name__ == "__main__":\\n    main()' not in source[:source.rfind("def main():")]
+    assert source.count('if __name__ == "__main__":') == 1
     assert not (folder / "runner_lib.py").exists()
     py_compile.compile(str(script), doraise=True)
 
