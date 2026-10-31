@@ -43,6 +43,28 @@ Actions → **Run on Kaggle** → כתוב prompt (והגדל `max_tokens` לד�
 
 הערות: ב-runner של GitHub מותקנים Python 3, Java (JDK 8/11/17/21), Node.js, gcc ו-git, ויש גישה לאינטרנט (pip / npm / maven עובדים). הגבלות: עד 6 שעות להפעלה, 4 ליבות ו-16GB.
 
+
+## Skills ויכולות
+
+המודל מקבל חבילות Skills מודולריות מתוך `skills/*/SKILL.md`. בזמן Push ל-Kaggle, הסקריפט אורז את החבילות לתוך ה-Kernel הפרטי. ה-worker יכול לקרוא ל-`list_skills` כדי לראות את הקטלוג ול-`read_skill` כדי לטעון רק את ההוראות הרלוונטיות למשימה.
+
+חבילות ה-Skills המובנות כרגע:
+- **פיתוח ותיקון:** software-engineering, debugging, testing-quality, technical-writing.
+- **תשתיות וכלים:** devops-ci, shell-automation, git-github, model-operations.
+- **פיתוח אפליקציות:** android-development, frontend-web, ux-accessibility, api-development.
+- **ניתוח ומחקר:** web-research, python-data, database-sql, performance-optimization.
+- **Agents ואבטחה:** ai-agent-engineering, linux-security.
+
+כלי סביבת העבודה הורחבו וכוללים:
+- `bash`, `write_file`, `read_file`.
+- `list_files` למיפוי תיקיות.
+- `search_files` לחיפוש טקסט בקבצים.
+- `get_environment` לקבלת פרטי OS, ארכיטקטורה, CPU, RAM, דיסק וגרסאות כלים — בלי להחזיר משתני סביבה או סודות.
+
+ה-Skills הם הוראות עבודה בלבד; הם אינם מעניקים הרשאות חדשות. פעולות קבצים ופקודות עדיין עוברות דרך שכבת ה-executor. לאחר שינוי Skills או כלים, יש להפעיל מחדש את ה-worker ואת ה-executor כדי שהריצות החדשות יטענו את הקוד המעודכן. ריצות שכבר פעילות ממשיכות עם הגרסה שאיתה התחילו.
+
+בדיקות CI רצות ב-Push וב-Pull Request: בדיקת תחביר Python, בדיקות agent/executor ו-smoke test לממשק.
+
 ## אבטחה ופרטיות
 
 - **הריפו ציבורי: כל השיחות והקוד גלויים לכולם.** אל תכתוב מידע פרטי.
