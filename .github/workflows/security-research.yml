@@ -144,11 +144,13 @@ jobs:
           PUBLISH_REPORT: ${{ inputs.publish_report }}
           TARGET_REPO: ${{ inputs.target_repo }}
           TARGET_REF: ${{ inputs.target_ref }}
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
         run: |
           {
             echo "## Security source research"
             echo
             echo "- Target: $TARGET_REPO@$TARGET_REF"
+            if [ -n "$KERNEL_REF" ]; then echo "- Private Kaggle kernel: https://www.kaggle.com/code/$KERNEL_REF"; fi
             echo "- Analysis mode: read-only source inspection; target code is not executed or modified."
             echo
             if [ "$PUBLISH_REPORT" = "true" ]; then
