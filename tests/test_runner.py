@@ -329,8 +329,13 @@ def test_skill_bundle():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     skills = module.load_skills()
-    expected = {"software-engineering", "debugging", "web-research", "python-data",
-                "android-development", "linux-security", "frontend-web", "git-github"}
+    expected = {
+        "software-engineering", "debugging", "web-research", "python-data",
+        "android-development", "linux-security", "frontend-web", "git-github",
+        "api-development", "testing-quality", "devops-ci", "database-sql",
+        "performance-optimization", "shell-automation", "ai-agent-engineering",
+        "technical-writing", "model-operations", "ux-accessibility",
+    }
     assert expected.issubset(skills), sorted(skills)
     assert all(item["content"].strip() and item["description"] for item in skills.values())
     print("skill bundle ok:", len(skills))
