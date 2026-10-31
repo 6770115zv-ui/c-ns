@@ -134,10 +134,12 @@ def sh(cmd, **kw):
 
 
 def setup_sandbox():
-    os.makedirs(P["work"], exist_ok=True)
-    os.makedirs(P["out"], exist_ok=True)
     if LOCAL:
+        os.makedirs(P["work"], exist_ok=True)
+        os.makedirs(P["out"], exist_ok=True)
         return
+    # Create the sandbox account first; useradd -m creates /home/sandbox.
+    # The runner user cannot create that home directory directly.
     steps = [
         ["sudo", "-n", "useradd", "-m", "-s", "/bin/bash", SANDBOX],
         ["sudo", "-n", "chmod", "755", f"/home/{SANDBOX}"],
