@@ -323,6 +323,19 @@ def test_agent_end_to_end():
     print("agent end-to-end ok")
 
 
+def test_skill_bundle():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("push_to_kaggle", os.path.join(ROOT, "scripts", "push_to_kaggle.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    skills = module.load_skills()
+    expected = {"software-engineering", "debugging", "web-research", "python-data",
+                "android-development", "linux-security", "frontend-web", "git-github"}
+    assert expected.issubset(skills), sorted(skills)
+    assert all(item["content"].strip() and item["description"] for item in skills.values())
+    print("skill bundle ok:", len(skills))
+
+
 def test_skills():
     skills = {
         "debugging": {"name": "debugging", "description": "Find root causes", "content": "Reproduce, fix, verify."},
@@ -401,6 +414,7 @@ if __name__ == "__main__":
     test_worker()
     test_stop_flag()
     test_executor_unit()
+    test_skill_bundle()
     test_skills()
     test_agent_end_to_end()
     print("ALL OK")
