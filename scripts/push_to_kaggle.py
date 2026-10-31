@@ -100,7 +100,7 @@ def main() -> None:
         "max_tokens": int(os.environ.get("IN_MAX_TOKENS") or 1024),
         "thinking": os.environ.get("IN_THINKING", "false").lower() == "true",
         "release_repo": os.environ["RELEASE_REPO"],
-        "skills": load_skills(),
+        "skills": load_skills() if mode == "worker" else {},
     }
     if mode == "worker":
         job.update({
