@@ -384,7 +384,7 @@ EXECUTOR_TOOLS = [
             "required": ["query"]}}},
     {"type": "function", "function": {
         "name": "get_environment",
-        "description": "Inspect safe runtime facts such as OS, architecture, CPU, RAM, free disk, and installed tool versions. Never returns secrets or environment variables.",
+        "description": "Inspect the GitHub Actions executor host OS, architecture, CPU, RAM, free disk, and installed tool versions. Never returns secrets or environment variables.",
         "parameters": {"type": "object", "properties": {}, "required": []}}},
 ]
 
@@ -412,7 +412,7 @@ SKILL_HINT = (
 
 AGENT_HINT = (
     "\n\nיש לך סביבת עבודה אמיתית ב-Linux. הכלים הזמינים כוללים bash, write_file, read_file, "
-    "list_files, search_files ו-get_environment. הקבצים נשמרים בין שיחות. "
+    "list_files, search_files ו-get_environment. inspect_compute מדווח על חומרת Kaggle עצמה. הקבצים נשמרים בין שיחות. "
     "השתמש ב-list_files כדי למפות תיקיות וב-search_files כדי לאתר הגדרות וקוד לפני שינוי. "
     "כתוב קבצים עם write_file ולא עם heredoc. הרץ ובדוק את הקוד לפני שאתה מדווח שהוא עובד. "
     "כשסיימת, ענה בעברית בקצרה מה עשית, אילו קבצים נוצרו ואילו בדיקות עברו, בלי להדביק קבצים שלמים בתשובה."
@@ -529,6 +529,7 @@ def inspect_compute(job: dict) -> dict:
         f"Model repository: {job.get('model_repo', 'unknown')}",
         f"Model file pattern: {job.get('model_pattern', 'unknown')}",
         f"Context setting: {job.get('ctx', 'default')}",
+        f"Max output tokens: {job.get('max_tokens', 'default')}",
     ]
     try:
         with open("/proc/meminfo", encoding="ascii", errors="replace") as fh:
