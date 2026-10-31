@@ -335,6 +335,7 @@ def test_skill_bundle():
         "api-development", "testing-quality", "devops-ci", "database-sql",
         "performance-optimization", "shell-automation", "ai-agent-engineering",
         "technical-writing", "model-operations", "ux-accessibility",
+        "android-legacy-compatibility", "kaggle-gpu-operations",
     }
     assert expected.issubset(skills), sorted(skills)
     assert all(item["content"].strip() and item["description"] for item in skills.values())
