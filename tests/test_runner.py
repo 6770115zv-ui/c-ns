@@ -323,6 +323,21 @@ def test_agent_end_to_end():
     print("agent end-to-end ok")
 
 
+def test_skills():
+    skills = {
+        "debugging": {"name": "debugging", "description": "Find root causes", "content": "Reproduce, fix, verify."},
+        "android-development": {"name": "android-development", "description": "Android APIs", "content": "Check minSdk."},
+    }
+    listing = json.loads(ns["list_skill_packs"]({"skills": skills})["output"])
+    assert [x["name"] for x in listing] == ["android-development", "debugging"], listing
+    good = ns["read_skill_pack"]({"skills": skills}, "debugging")
+    assert good["ok"] and "Reproduce" in good["output"], good
+    bad = ns["read_skill_pack"]({"skills": skills}, "missing")
+    assert not bad["ok"] and "list_skills" in bad["output"], bad
+    assert "list_skills" in [x["function"]["name"] for x in ns["TOOLS"]]
+    print("skills ok")
+
+
 def test_executor_unit():
     import importlib.util
     base = tempfile.mkdtemp()
@@ -349,7 +364,21 @@ def test_executor_unit():
     assert r["ok"] and "started" in r["output"] and r["ms"] < 3000, r   # תהליך רקע לא תוקע את הכלי
     r = ex.run_tool("aa000008", {"tool": "read_file", "args": {"path": "src/Main.java"}})
     assert r["ok"] and "class Main" in r["output"], r
-    assert ex.run_tool("aa000009", {"tool": "nope", "args": {}})["ok"] is False
+    listed = ex.run_tool("aa000009", {"tool": "list_files", "args": {"path": "src"}})
+    assert listed["ok"] and "Main.java" in listed["output"], listed
+    searched = ex.run_tool("aa000010", {"tool": "search_files", "args": {"query": "System.out", "path": "."}})
+    assert searched["ok"] and "src/Main.java" in searched["output"], searched
+    env = ex.run_tool("aa000011", {"tool": "get_environment", "args": {}})
+    assert env["ok"] and "Architecture:" in env["output"] and "Python:" in env["output"], env
+    outside = tempfile.mkdtemp()
+    link = os.path.join(ex.P["work"], "outside-link")
+    try:
+        os.symlink(outside, link)
+        assert ex.safe_path("outside-link/escape.txt") is None, "symlink escape must be rejected"
+    finally:
+        if os.path.islink(link):
+            os.unlink(link)
+    assert ex.run_tool("aa000012", {"tool": "nope", "args": {}})["ok"] is False
     # סיווג: רק github-actions[bot], בתוך Issue של הבעלים, ובגיל סביר
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
@@ -372,5 +401,6 @@ if __name__ == "__main__":
     test_worker()
     test_stop_flag()
     test_executor_unit()
+    test_skills()
     test_agent_end_to_end()
     print("ALL OK")
