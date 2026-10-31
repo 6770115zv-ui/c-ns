@@ -50,10 +50,10 @@ def test_read_only_source_tools():
         (root / "drivers").mkdir()
         (root / "other").mkdir()
         (root / "drivers" / "net.c").write_text(
-            "int probe(void) {\\n    copy_from_user(dst, src, size);\\n    return 0;\\n}\\n",
+            "int probe(void) {\n    copy_from_user(dst, src, size);\n    return 0;\n}\n",
             encoding="utf-8",
         )
-        (root / "other" / "ignored.c").write_text("copy_from_user(a, b, c);\\n", encoding="utf-8")
+        (root / "other" / "ignored.c").write_text("copy_from_user(a, b, c);\n", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(root)], check=True)
         subprocess.run(["git", "-C", str(root), "config", "user.name", "Test"], check=True)
         subprocess.run(["git", "-C", str(root), "config", "user.email", "test@example.invalid"], check=True)
