@@ -48,10 +48,10 @@ Actions → **Run on Kaggle** → כתוב prompt (והגדל `max_tokens` לד�
 
 המודל מקבל חבילות Skills מודולריות מתוך `skills/*/SKILL.md`. בזמן Push ל-Kaggle, הסקריפט אורז את החבילות לתוך ה-Kernel הפרטי. ה-worker יכול לקרוא ל-`list_skills` כדי לראות את הקטלוג ול-`read_skill` כדי לטעון רק את ההוראות הרלוונטיות למשימה.
 
-חבילות ה-Skills המובנות כרגע:
+חבילות ה-Skills המובנות כרגע (20 חבילות):
 - **פיתוח ותיקון:** software-engineering, debugging, testing-quality, technical-writing.
-- **תשתיות וכלים:** devops-ci, shell-automation, git-github, model-operations.
-- **פיתוח אפליקציות:** android-development, frontend-web, ux-accessibility, api-development.
+- **תשתיות וכלים:** devops-ci, shell-automation, git-github, model-operations, kaggle-gpu-operations.
+- **פיתוח אפליקציות:** android-development, android-legacy-compatibility, frontend-web, ux-accessibility, api-development.
 - **ניתוח ומחקר:** web-research, python-data, database-sql, performance-optimization.
 - **Agents ואבטחה:** ai-agent-engineering, linux-security.
 
