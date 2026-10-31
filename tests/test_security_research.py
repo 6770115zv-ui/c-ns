@@ -90,7 +90,28 @@ def test_read_only_source_tools():
             outside.unlink()
 
 
+
+def test_kaggle_bundle():
+    import importlib.util
+    import py_compile
+
+    push_spec = importlib.util.spec_from_file_location(
+        "push_security_research", ROOT / "scripts" / "push_security_research.py"
+    )
+    push_module = importlib.util.module_from_spec(push_spec)
+    push_spec.loader.exec_module(push_module)
+    job = {"mode": "security-research", "model_repo": "test/model", "release_repo": "owner/repo"}
+    folder = push_module.build_dir("test-user", "security-test", job)
+    script = folder / "security_research.py"
+    source = script.read_text(encoding="utf-8")
+    assert "base = sys.modules[\"__main__\"]" in source
+    assert "def start_llama(" in source and "def run_research_agent(" in source
+    assert 'if __name__ == "__main__":\\n    main()' not in source[:source.rfind("def main():")]
+    assert not (folder / "runner_lib.py").exists()
+    py_compile.compile(str(script), doraise=True)
+
 if __name__ == "__main__":
     test_input_validation()
     test_read_only_source_tools()
+    test_kaggle_bundle()
     print("security research tests: OK")
