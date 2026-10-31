@@ -260,7 +260,7 @@ def get_environment():
     try:
         with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as fh:
             for line in fh:
-                if line.lower().startswith(("model name", "hardware", "processor")) and ":" in line:
+                if line.lower().startswith(("model name", "hardware", "cpu model")) and ":" in line:
                     facts.append("CPU model: " + line.split(":", 1)[1].strip())
                     break
     except OSError:
