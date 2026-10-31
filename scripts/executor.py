@@ -17,7 +17,9 @@ import argparse
 import base64
 import json
 import os
+import platform
 import re
+import shutil
 import shlex
 import signal
 import subprocess
@@ -156,17 +158,137 @@ def setup_sandbox():
 
 
 def safe_path(rel):
-    """נתיב יחסי בתוך תיקיית העבודה, או None אם הוא מנסה לברוח ממנה."""
+    """Resolve a workspace path and reject traversal, including symlink escapes."""
     if not isinstance(rel, str) or not rel.strip():
         return None
     rel = rel.strip()
+    if rel == ".":
+        return P["work"]
     if rel.startswith(P["work"] + "/"):
         rel = rel[len(P["work"]) + 1:]
     rel = rel.lstrip("/")
     parts = [x for x in rel.split("/") if x not in ("", ".")]
     if not parts or ".." in parts or "\x00" in rel:
         return None
-    return os.path.join(P["work"], *parts)
+    candidate = os.path.abspath(os.path.join(P["work"], *parts))
+    base = os.path.realpath(P["work"])
+    resolved = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath((base, resolved)) != base:
+            return None
+    except ValueError:
+        return None
+    return candidate
+
+
+def list_files(path=".", limit=200):
+    ap = safe_path(path or ".")
+    if ap is None:
+        return {"ok": False, "exit": 1, "output": "נתיב לא חוקי"}
+    if not os.path.isdir(ap):
+        return {"ok": False, "exit": 1, "output": f"לא תיקייה: {path}"}
+    try:
+        limit = max(1, min(int(limit or 200), 500))
+        names = sorted(os.listdir(ap), key=str.casefold)
+    except (OSError, TypeError, ValueError) as e:
+        return {"ok": False, "exit": 1, "output": str(e)[:500]}
+    rows = []
+    for name in names[:limit]:
+        full = os.path.join(ap, name)
+        try:
+            if os.path.islink(full):
+                kind, size = "LINK", ""
+            elif os.path.isdir(full):
+                kind, size = "DIR ", ""
+            else:
+                kind, size = "FILE", f" ({os.path.getsize(full)} B)"
+            rows.append(f"[{kind}] {name}{size}")
+        except OSError:
+            rows.append(f"[????] {name}")
+    suffix = f"\n... ועוד {len(names) - limit} פריטים" if len(names) > limit else ""
+    return {"ok": True, "exit": 0, "output": "\n".join(rows) + suffix or "(תיקייה ריקה)"}
+
+
+def search_files(query, path=".", limit=50):
+    if not isinstance(query, str) or not query.strip():
+        return {"ok": False, "exit": 1, "output": "חסר query"}
+    root = safe_path(path or ".")
+    if root is None or not os.path.isdir(root):
+        return {"ok": False, "exit": 1, "output": "נתיב חיפוש לא חוקי או לא קיים"}
+    try:
+        limit = max(1, min(int(limit or 50), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    ignored = {".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist", ".gradle", ".cache"}
+    needle = query.casefold()
+    matches = []
+    for current, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in ignored and not os.path.islink(os.path.join(current, d))]
+        for name in sorted(files, key=str.casefold):
+            full = os.path.join(current, name)
+            if os.path.islink(full):
+                continue
+            try:
+                if os.path.getsize(full) > 1_000_000:
+                    continue
+                with open(full, "rb") as fh:
+                    raw = fh.read(1_000_001)
+                if b"\x00" in raw[:4096]:
+                    continue
+                decoded = raw.decode("utf-8", errors="replace")
+            except OSError:
+                continue
+            for line_no, line in enumerate(decoded.splitlines(), 1):
+                if needle in line.casefold():
+                    rel = os.path.relpath(full, P["work"])
+                    snippet = line.strip()
+                    if len(snippet) > 300:
+                        snippet = snippet[:297] + "..."
+                    matches.append(f"{rel}:{line_no}: {snippet}")
+                    if len(matches) >= limit:
+                        return {"ok": True, "exit": 0, "output": "\n".join(matches) + "\n... הגעה למגבלת התוצאות"}
+    return {"ok": True, "exit": 0, "output": "\n".join(matches) if matches else "לא נמצאו התאמות"}
+
+
+def get_environment():
+    facts = [
+        f"OS: {platform.system()} {platform.release()}",
+        f"Architecture: {platform.machine()}",
+        f"Python: {platform.python_version()}",
+        f"CPU count: {os.cpu_count()}",
+    ]
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.lower().startswith(("model name", "hardware", "processor")) and ":" in line:
+                    facts.append("CPU model: " + line.split(":", 1)[1].strip())
+                    break
+    except OSError:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="ascii", errors="replace") as fh:
+            mem = next((line for line in fh if line.startswith("MemTotal:")), "")
+        if mem:
+            facts.append("RAM: " + mem.split(":", 1)[1].strip())
+    except OSError:
+        pass
+    try:
+        usage = shutil.disk_usage(P["work"])
+        facts.append(f"Workspace disk: total {usage.total // (1024**3)} GiB, free {usage.free // (1024**3)} GiB")
+    except OSError:
+        pass
+    for program, flag in (("java", "-version"), ("node", "--version"), ("gcc", "--version"), ("git", "--version")):
+        binary = shutil.which(program)
+        if not binary:
+            facts.append(f"{program}: not installed")
+            continue
+        try:
+            r = subprocess.run([binary, flag], capture_output=True, text=True, timeout=5)
+            value = (r.stdout or r.stderr).strip().splitlines()
+            facts.append(f"{program}: {value[0][:180] if value else 'available'}")
+        except (OSError, subprocess.TimeoutExpired):
+            facts.append(f"{program}: version check failed")
+    return {"ok": True, "exit": 0, "output": "\n".join(facts)}
 
 
 def trunc(text, limit=OUT_LIMIT):
@@ -251,6 +373,12 @@ def run_tool(cid, payload):
         return write_file(a.get("path"), a.get("content", ""))
     if tool == "read_file":
         return read_file(a.get("path"))
+    if tool == "list_files":
+        return list_files(a.get("path", "."), a.get("limit", 200))
+    if tool == "search_files":
+        return search_files(a.get("query"), a.get("path", "."), a.get("limit", 50))
+    if tool == "get_environment":
+        return get_environment()
     return {"ok": False, "exit": 1, "output": f"כלי לא מוכר: {tool}"}
 
 
