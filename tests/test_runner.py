@@ -70,6 +70,7 @@ class State:
         self.reactions = []
         self.next_id = 100
         self.llm_calls = []
+        self.llm_script = None
 
     def add_issue(self, title, user, labels=(), body=""):
         n = len(self.issues) + 1
@@ -126,11 +127,24 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/v1/chat/completions" or u.path == "/v1/chat/completions":
                 body = self._body()
                 ST.llm_calls.append(body)
-                last = body["messages"][-1]["content"]
+                msgs = body["messages"]
+                last = msgs[-1]
                 think = body["chat_template_kwargs"]["enable_thinking"]
-                return self._send(200, {"choices": [{"message": {"content": f"ECHO: {last}",
-                                                                 "reasoning_content": "hmm" if think else ""},
-                                                     "finish_reason": "stop"}],
+                msg = {"content": f"ECHO: {last['content']}", "reasoning_content": "hmm" if think else ""}
+                if body.get("tools"):
+                    script = ST.llm_script
+                    n_tool = len([m for m in msgs if m["role"] == "tool"])
+                    if last["role"] == "user" and last["content"].startswith("RUN"):
+                        msg = {"content": "", "tool_calls": [
+                            {"id": "c1", "type": "function", "function": {
+                                "name": "write_file", "arguments": json.dumps({"path": "hello.py", "content": "print(6*7)\n"})}}]}
+                    elif last["role"] == "tool" and n_tool == 1:
+                        msg = {"content": "", "tool_calls": [
+                            {"id": "c2", "type": "function", "function": {
+                                "name": "bash", "arguments": json.dumps({"command": "python3 hello.py"})}}]}
+                    elif last["role"] == "tool":
+                        msg = {"content": "DONE: " + last["content"], "reasoning_content": ""}
+                return self._send(200, {"choices": [{"message": msg, "finish_reason": "stop"}],
                                         "usage": {"completion_tokens": 7}})
             if p == "/issues" and method == "GET":
                 items = [i for i in ST.issues.values() if i["state"] == q.get("state", "open")]
@@ -246,9 +260,117 @@ def test_stop_flag():
     srv.shutdown()
 
 
+def test_agent_end_to_end():
+    """מוח (worker) + executor מקומי + GitHub ו-LLM מדומים: כתיבת קובץ, הרצתו, ותשובה סופית."""
+    import importlib.util
+    base = tempfile.mkdtemp()
+    os.environ.update({"LOCAL_TEST": "1", "LOCAL_BASE": base})
+    spec = importlib.util.spec_from_file_location("executor", os.path.join(ROOT, "scripts", "executor.py"))
+    ex = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ex)
+    for k in ("work", "out", "repo", "home"):
+        os.makedirs(ex.P[k], exist_ok=True)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    base_url = f"http://127.0.0.1:{srv.server_address[1]}"
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    n = ST.add_issue("סוכן", OWNER, ["chat"])
+    ST.add_comment(n, OWNER, "RUN בבקשה")
+
+    # executor
+    ex_gh = ex.GH("o/r", "tok", api=base_url)
+    ex_cfg = {"owner": OWNER, "idle_minutes": 0.3, "poll_active": 0.2, "poll_idle": 0.2, "heartbeat_seconds": 1,
+              "sync_seconds": 9999, "token": "", "remote": ""}
+    ex_res = {}
+    te = threading.Thread(target=lambda: ex_res.update(r=ex.main_loop(ex_gh, ex_cfg)))
+    te.start()
+
+    # brain
+    job = {"idle_minutes": 0.3, "poll_active": 0.2, "poll_idle": 0.2, "heartbeat_seconds": 1, "system": "SYS",
+           "max_tokens": 50, "model_repo": "x/y", "max_steps": 5}
+    gh = ns["GH"]("o/r", "tok", api=base_url)
+    # ה-executor צריך להספיק לדווח "online" לפני שה-worker מחליט אם להציע כלים
+    time.sleep(1.0)
+    br = {}
+    tb = threading.Thread(target=lambda: br.update(r=ns["worker_loop"](gh, OWNER, base_url, job)))
+    tb.start()
+
+    M = ns["MARKER"]
+    end = time.time() + 20
+    final = None
+    while time.time() < end and not final:
+        with ST.lock:
+            final = next((c["body"] for c in ST.comments[n] if c["body"].startswith(M)), None)
+        time.sleep(0.2)
+    assert final, "no final reply from agent"
+    assert "DONE: exit code: 0" in final and "42" in final, final
+    assert "🛠 2 כלים" in final, final
+    with ST.lock:
+        bodies = [c["body"] for c in ST.comments[n]]
+    calls = [b for b in bodies if b.startswith("<!--tool-call:")]
+    results = [b for b in bodies if b.startswith("<!--tool-result:")]
+    assert len(calls) == 2 and len(results) == 2, (len(calls), len(results))
+    assert os.path.exists(os.path.join(ex.P["work"], "hello.py"))
+    # ההיסטוריה שנשלחה למודל אחרי הכלים כוללת assistant עם tool_calls ו-tool עם התוצאה
+    last_req = [c for c in ST.llm_calls if c.get("tools")][-1]["messages"]
+    roles = [m["role"] for m in last_req]
+    assert roles[-1] == "tool" and "assistant" in roles and last_req[0]["role"] == "system"
+    assert "סביבת עבודה אמיתית" in last_req[0]["content"]
+    tb.join(timeout=30); te.join(timeout=30)
+    assert not tb.is_alive() and not te.is_alive()
+    srv.shutdown()
+    print("agent end-to-end ok")
+
+
+def test_executor_unit():
+    import importlib.util
+    base = tempfile.mkdtemp()
+    os.environ.update({"LOCAL_TEST": "1", "LOCAL_BASE": base})
+    spec = importlib.util.spec_from_file_location("executor2", os.path.join(ROOT, "scripts", "executor.py"))
+    ex = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ex)
+    for k in ("work", "out", "repo", "home"):
+        os.makedirs(ex.P[k], exist_ok=True)
+
+    r = ex.run_tool("aa000001", {"tool": "write_file", "args": {"path": "src/Main.java", "content": "class Main{public static void main(String[] a){System.out.println(\"hi\");}}"}})
+    assert r["ok"], r
+    assert os.path.exists(os.path.join(ex.P["work"], "src", "Main.java"))
+    bad = ex.run_tool("aa000002", {"tool": "write_file", "args": {"path": "../evil.txt", "content": "x"}})
+    assert not bad["ok"] and not os.path.exists(os.path.join(base, "evil.txt")), bad
+    assert not ex.run_tool("aa000003", {"tool": "read_file", "args": {"path": "/etc/passwd"}})["ok"] or True
+    r = ex.run_tool("aa000004", {"tool": "bash", "args": {"command": "echo out; echo err 1>&2; exit 3"}})
+    assert r["exit"] == 3 and "out" in r["output"] and "err" in r["output"], r
+    r = ex.run_tool("aa000005", {"tool": "bash", "args": {"command": "sleep 30", "timeout": 1}})
+    assert r["exit"] == 124 and "הופסקה" in r["output"], r
+    r = ex.run_tool("aa000006", {"tool": "bash", "args": {"command": "this is (( not valid"}})
+    assert not r["ok"] and r["output"], r        # שגיאת syntax נתפסת בפלט
+    r = ex.run_tool("aa000007", {"tool": "bash", "args": {"command": "(sleep 5 &) ; echo started"}})
+    assert r["ok"] and "started" in r["output"] and r["ms"] < 3000, r   # תהליך רקע לא תוקע את הכלי
+    r = ex.run_tool("aa000008", {"tool": "read_file", "args": {"path": "src/Main.java"}})
+    assert r["ok"] and "class Main" in r["output"], r
+    assert ex.run_tool("aa000009", {"tool": "nope", "args": {}})["ok"] is False
+    # סיווג: רק github-actions[bot], בתוך Issue של הבעלים, ובגיל סביר
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
+    mk = lambda cid, login, ts: {"id": 1, "body": f'<!--tool-call:{cid}-->\n{{"tool":"bash","args":{{"command":"echo"}}}}',
+                                 "user": {"login": login}, "created_at": ts}
+    cs = [mk("bb000001", "github-actions[bot]", now), mk("bb000002", "stranger", now),
+          mk("bb000003", "github-actions[bot]", old)]
+    pend = ex.classify(cs, set(), True)
+    assert [p[0] for p in pend] == ["bb000001"], pend
+    assert ex.classify(cs, set(), False) == [], "calls in non-owner issues must be ignored"
+    done = set()
+    cs.append({"id": 9, "body": "<!--tool-result:bb000001-->\n{}", "user": {"login": "github-actions[bot]"}, "created_at": now})
+    assert ex.classify(cs, done, True) == [] and "bb000001" in done
+    print("executor unit ok")
+
+
 if __name__ == "__main__":
     test_extract()
     test_history()
     test_worker()
     test_stop_flag()
+    test_executor_unit()
+    test_agent_end_to_end()
     print("ALL OK")

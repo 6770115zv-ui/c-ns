@@ -75,6 +75,7 @@ def main() -> None:
             "gh_owner": os.environ["GH_OWNER"],
             "idle_minutes": float(os.environ.get("IN_IDLE_MINUTES") or 30),
             "max_hours": 5.2,
+            "ctx": int(os.environ.get("IN_CTX") or 16384),
         })
 
     # אבחון: מה המצב הנוכחי של ה-Kernel הקיים (אם יש)

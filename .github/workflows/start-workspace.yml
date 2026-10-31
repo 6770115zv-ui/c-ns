@@ -1,0 +1,54 @@
+name: Start workspace (executor)
+
+# סביבת עבודה על ה-runner של GitHub: מריצה פקודות bash / python / java לבקשת המודל,
+# ומסנכרנת את הקבצים לענף workspace. נסגרת לבד אחרי idle_minutes בלי פעילות.
+on:
+  workflow_dispatch:
+    inputs:
+      idle_minutes:
+        description: "דקות בלי פעילות עד כיבוי אוטומטי"
+        required: false
+        default: "45"
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: workspace
+  cancel-in-progress: false
+
+jobs:
+  executor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      # בלי שמירת האישורים ב-.git: המשתמש המבודד לא צריך (ולא יכול) למצוא טוקן
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -q requests
+
+      - name: Run executor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          IDLE_MINUTES: ${{ inputs.idle_minutes }}
+        run: python scripts/executor.py
+
+      # רץ גם אחרי ביטול או timeout, כדי שהקבצים לא יאבדו
+      - name: Final sync
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: python scripts/executor.py --sync-only

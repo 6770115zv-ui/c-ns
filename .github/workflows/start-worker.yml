@@ -14,12 +14,17 @@ on:
       max_tokens:
         description: "מקסימום טוקנים לתשובה"
         required: false
-        default: "6000"
+        default: "4096"
+        type: string
+      ctx:
+        description: "גודל הקשר של המודל (16384, ואם יש מספיק זיכרון אפשר 32768)"
+        required: false
+        default: "16384"
         type: string
       system:
         description: "הודעת system"
         required: false
-        default: "אתה עוזר מועיל. ענה בעברית ברורה. כשאתה כותב קוד, שים כל קובץ בבלוק קוד נפרד."
+        default: "אתה עוזר מועיל. ענה בעברית ברורה."
         type: string
       model_repo:
         required: false
@@ -66,6 +71,7 @@ jobs:
           IN_MODEL_REPO: ${{ inputs.model_repo }}
           IN_MODEL_PATTERN: ${{ inputs.model_pattern }}
           IN_MAX_TOKENS: ${{ inputs.max_tokens }}
+          IN_CTX: ${{ inputs.ctx }}
           IN_IDLE_MINUTES: ${{ inputs.idle_minutes }}
           IN_ACCELERATOR: ${{ inputs.accelerator }}
           RELEASE_REPO: ${{ github.repository }}

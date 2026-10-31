@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import time
 import urllib.request
+import uuid
 
 import requests
 
@@ -24,6 +25,8 @@ LLM_URL = "http://127.0.0.1:8080"
 
 MARKER = "<!--llm-reply-->"
 STATUS_TITLE = "[worker-status]"
+EXECUTOR_TITLE = "[executor-status]"
+BOT_LOGIN = "github-actions[bot]"
 FOOTER_RE = re.compile(r"\n\n<sub>.*?</sub>\s*$", re.S)
 DETAILS_RE = re.compile(r"<details>.*?</details>", re.S)
 
@@ -161,7 +164,7 @@ def start_llama(job: dict):
     env = dict(os.environ)
     env["LD_LIBRARY_PATH"] = ":".join([bindir, "/usr/local/cuda/lib64", env.get("LD_LIBRARY_PATH", "")])
     cmd = [server, "-m", gguf, "-ngl", "99", "-c", str(job.get("ctx", 16384)), "-np", "1",
-           "--host", "127.0.0.1", "--port", "8080"]
+           "--jinja", "--host", "127.0.0.1", "--port", "8080"]
     if n_gpu > 1:
         cmd += ["--tensor-split", ",".join(["1"] * n_gpu)]
     log = open(os.path.join(OUT, "server.log"), "w")
@@ -187,19 +190,34 @@ def start_llama(job: dict):
     return proc
 
 
-def chat(llm_url: str, messages, max_tokens: int, thinking: bool, temperature: float = 0.6):
+def chat_full(llm_url: str, messages, max_tokens: int, thinking: bool, tools=None, temperature: float = 0.6):
     body = {
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "chat_template_kwargs": {"enable_thinking": bool(thinking)},
     }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
     r = requests.post(llm_url + "/v1/chat/completions", json=body, timeout=3600)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise RuntimeError(f"LLM HTTP {r.status_code}: {r.text[:300]}")
     data = r.json()
     ch = data["choices"][0]
     msg = ch["message"]
-    return msg.get("content") or "", msg.get("reasoning_content") or "", data.get("usage", {}), ch.get("finish_reason")
+    return {
+        "content": msg.get("content") or "",
+        "reasoning": msg.get("reasoning_content") or "",
+        "usage": data.get("usage", {}),
+        "finish": ch.get("finish_reason"),
+        "tool_calls": msg.get("tool_calls") or [],
+    }
+
+
+def chat(llm_url: str, messages, max_tokens: int, thinking: bool, temperature: float = 0.6):
+    d = chat_full(llm_url, messages, max_tokens, thinking, None, temperature)
+    return d["content"], d["reasoning"], d["usage"], d["finish"]
 
 
 # ----------------------------------------------------------------------------
@@ -320,7 +338,165 @@ def build_messages(comments, owner: str, system: str, max_chars: int = 36000):
     return head + msgs
 
 
-def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict, handled) -> None:
+TOOLS = [
+    {"type": "function", "function": {
+        "name": "bash",
+        "description": "Run a bash command in the workspace (Linux, Python 3, Java 17, Node.js, gcc, git). "
+                       "Returns the exit code and combined stdout/stderr. Default timeout 120s, max 600s.",
+        "parameters": {"type": "object", "properties": {
+            "command": {"type": "string", "description": "The shell command(s) to run."},
+            "timeout": {"type": "integer", "description": "Timeout in seconds."}}, "required": ["command"]}}},
+    {"type": "function", "function": {
+        "name": "write_file",
+        "description": "Create or overwrite a text file. The path is relative to the workspace directory.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {
+        "name": "read_file",
+        "description": "Read a text file (path relative to the workspace). Output is truncated.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+]
+
+AGENT_HINT = (
+    "\n\nיש לך סביבת עבודה אמיתית (Linux עם Python 3, Java 17, Node.js, gcc ו-git) והכלים bash, write_file, read_file. "
+    "הקבצים נשמרים בין שיחות. כתוב קבצים עם write_file ולא עם heredoc. הרץ ובדוק את הקוד שלך לפני שאתה מדווח שהוא עובד. "
+    "כשסיימת, ענה בעברית בקצרה מה עשית ואילו קבצים נוצרו, בלי להדביק קבצים שלמים בתשובה."
+)
+
+
+def context_budget(job: dict) -> int:
+    """כמה תווים של היסטוריה מותר לשלוח, כך שהקלט ועוד max_tokens ייכנסו בהקשר של המודל."""
+    if job.get("history_chars"):
+        return int(job["history_chars"])
+    ctx = int(job.get("ctx", 16384))
+    mt = int(job.get("max_tokens", 6000))
+    return max(6000, int((ctx - mt - 800) * 2.2))
+
+
+def executor_online(gh: GH, cache: dict) -> bool:
+    """האם סביבת העבודה (executor) מחוברת כרגע. בודק לכל היותר פעם ב-15 שניות."""
+    now = time.time()
+    if now - cache.get("checked", 0) < 15:
+        return cache.get("online", False)
+    cache["checked"] = now
+    online = False
+    try:
+        if not cache.get("no"):
+            cache["no"] = find_status_issue(gh, EXECUTOR_TITLE)
+        if cache.get("no"):
+            st, data, _ = gh.call("GET", f"/issues/{cache['no']}")
+            m = re.search(r"\{[^{}]*\}", (data or {}).get("body") or "")
+            if st == 200 and m:
+                j = json.loads(m.group(0))
+                online = j.get("state") == "online" and now - float(j.get("ts", 0)) < 150
+    except Exception as e:  # noqa: BLE001
+        print("[worker] executor check failed:", e, flush=True)
+    cache["online"] = online
+    return online
+
+
+def call_tool(gh: GH, number: int, name: str, args: dict, poll: float = 2.0) -> dict:
+    """שולח בקשת כלי כתגובה ב-Issue וממתין לתוצאה מה-executor."""
+    cid = uuid.uuid4().hex[:8]
+    body = f"<!--tool-call:{cid}-->\n" + json.dumps({"tool": name, "args": args}, ensure_ascii=False)
+    if len(body) > 60000:
+        return {"ok": False, "exit": 1, "output": "הבקשה גדולה מדי (מעל 60KB). פצל לכמה קבצים."}
+    st, data, _ = gh.call("POST", f"/issues/{number}/comments", {"body": body})
+    if st != 201:
+        return {"ok": False, "exit": 1, "output": f"לא הצלחתי לשלוח בקשה ל-executor (HTTP {st})"}
+    since = data.get("created_at")
+    t = args.get("timeout") if isinstance(args, dict) else None
+    try:
+        wait = (min(int(t), 600) if t else 120) + 90 if name == "bash" else 120
+    except (TypeError, ValueError):
+        wait = 210
+    deadline = time.time() + wait
+    marker = f"<!--tool-result:{cid}-->"
+    etag = None
+    while time.time() < deadline:
+        time.sleep(poll)
+        try:
+            st, items, new_etag = gh.call("GET", f"/issues/{number}/comments", etag=etag,
+                                          params={"since": since, "per_page": 100})
+        except Exception:  # noqa: BLE001
+            continue
+        if st == 200:
+            etag = new_etag
+            for c in items or []:
+                b = c.get("body") or ""
+                # מקבלים תוצאות רק מ-github-actions[bot], כדי שאף אחד אחר לא יזייף תוצאה
+                if b.startswith(marker) and (c.get("user") or {}).get("login") == BOT_LOGIN:
+                    try:
+                        return json.loads(b[len(marker):].strip())
+                    except ValueError:
+                        return {"ok": False, "exit": 1, "output": "תוצאה לא קריאה מה-executor"}
+    return {"ok": False, "exit": 124, "output": "ה-executor לא ענה בזמן. ייתכן שהוא כבוי."}
+
+
+def model_view(res: dict, name: str, limit: int = 3500) -> str:
+    out = res.get("output", "")
+    if len(out) > limit:
+        out = out[: limit // 2] + f"\n...[נחתכו {len(out) - limit} תווים]...\n" + out[-limit // 2:]
+    if name == "bash":
+        return f"exit code: {res.get('exit')}\n{out}"
+    return ("" if res.get("ok") else "ERROR: ") + out
+
+
+def trim_agent_context(msgs: list, budget: int) -> None:
+    """מקצר תוצאות כלים ישנות ואחר כך מוחק היסטוריה ישנה, עד שהשיחה נכנסת בתקציב."""
+    def total():
+        return sum(len(m.get("content") or "") + len(json.dumps(m.get("tool_calls") or [])) for m in msgs)
+
+    if total() <= budget:
+        return
+    tools_idx = [i for i, m in enumerate(msgs) if m["role"] == "tool"]
+    for i in tools_idx[:-2]:
+        if total() <= budget:
+            return
+        msgs[i]["content"] = msgs[i]["content"][:300] + "\n...[הפלט קוצר]"
+    cur = max((i for i, m in enumerate(msgs) if m["role"] == "user"), default=0)
+    while total() > budget and cur > 1:
+        del msgs[1]
+        cur -= 1
+        while len(msgs) > 1 and msgs[1]["role"] != "user" and cur > 1:
+            del msgs[1]
+            cur -= 1
+
+
+def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinking: bool):
+    max_steps = int(job.get("max_steps", 15))
+    max_tokens = int(job.get("max_tokens", 6000))
+    budget = context_budget(job)
+    steps, completion = 0, 0
+    while True:
+        trim_agent_context(msgs, budget)
+        d = chat_full(llm_url, msgs, max_tokens, thinking, TOOLS)
+        completion += int(d["usage"].get("completion_tokens", 0) or 0)
+        calls = d["tool_calls"]
+        if not calls or steps >= max_steps:
+            text = d["content"]
+            if calls:
+                text = (text + "\n\n" if text else "") + '⚠️ הגעתי למגבלת הצעדים. כתוב "המשך" כדי להמשיך.'
+            return text, d["reasoning"], {"completion_tokens": completion}, d["finish"], steps
+        msgs.append({"role": "assistant", "content": d["content"] or "", "tool_calls": calls})
+        for tc in calls:
+            fn = tc.get("function") or {}
+            name = fn.get("name", "")
+            args = fn.get("arguments") or {}
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args) if args.strip() else {}
+                except ValueError:
+                    args = {}
+            if not isinstance(args, dict):
+                args = {}
+            print(f"[worker] tool {name} in #{number}", flush=True)
+            res = call_tool(gh, number, name, args)
+            msgs.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": model_view(res, name)})
+            steps += 1
+
+
+def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict, handled, exec_cache=None) -> None:
     last = comments[-1]
     handled.add(last["id"])
     try:
@@ -328,16 +504,26 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
     except Exception:  # noqa: BLE001
         pass
 
-    msgs = build_messages(comments, owner, job.get("system", ""), int(job.get("history_chars", 36000)))
+    msgs = build_messages(comments, owner, job.get("system", ""), context_budget(job))
     thinking = False
     if msgs and msgs[-1]["content"].startswith("/think"):
         thinking = True
         msgs[-1]["content"] = msgs[-1]["content"][len("/think"):].strip() or "המשך."
 
+    use_tools = bool(job.get("tools", True)) and executor_online(gh, exec_cache if exec_cache is not None else {})
+    if use_tools:
+        if msgs and msgs[0]["role"] == "system":
+            msgs[0]["content"] += AGENT_HINT
+        else:
+            msgs.insert(0, {"role": "system", "content": AGENT_HINT.strip()})
+
     t0 = time.time()
-    reasoning, usage, finish = "", {}, None
+    reasoning, usage, finish, steps = "", {}, None, 0
     try:
-        text, reasoning, usage, finish = chat(llm_url, msgs, int(job.get("max_tokens", 6000)), thinking)
+        if use_tools:
+            text, reasoning, usage, finish, steps = agent_loop(gh, number, msgs, llm_url, job, thinking)
+        else:
+            text, reasoning, usage, finish = chat(llm_url, msgs, int(job.get("max_tokens", 6000)), thinking)
     except Exception as e:  # noqa: BLE001
         text = f"⚠️ שגיאה בהפעלת המודל: {e}"
         finish = "error"
@@ -348,7 +534,8 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         body += "\n\n> ⚠️ התשובה נחתכה כי הגיעה למגבלת הטוקנים. כתוב \"המשך\" כדי להמשיך."
     if reasoning:
         body += f"\n\n<details><summary>חשיבה</summary>\n\n{reasoning[:8000]}\n</details>"
-    body += f"\n\n<sub>⏱ {dt:.1f}s · {usage.get('completion_tokens', '?')} tokens</sub>"
+    extra = f" · 🛠 {steps} כלים" if steps else ""
+    body += f"\n\n<sub>⏱ {dt:.1f}s · {usage.get('completion_tokens', '?')} tokens{extra}</sub>"
     body = body[:60000]
 
     st, data, _ = gh.call("POST", f"/issues/{number}/comments", {"body": body})
@@ -356,12 +543,19 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         raise RuntimeError(f"post comment HTTP {st}: {data}")
 
 
-def ensure_status_issue(gh: GH) -> int:
+def find_status_issue(gh: GH, title: str = STATUS_TITLE):
     st, data, _ = gh.call("GET", "/issues", params={"state": "open", "per_page": 100,
                                                     "sort": "created", "direction": "asc"})
     for i in data or []:
-        if i.get("title") == STATUS_TITLE and "pull_request" not in i:
+        if i.get("title") == title and "pull_request" not in i:
             return i["number"]
+    return None
+
+
+def ensure_status_issue(gh: GH) -> int:
+    n = find_status_issue(gh, STATUS_TITLE)
+    if n:
+        return n
     st, data, _ = gh.call("POST", "/issues", {"title": STATUS_TITLE, "body": "starting"})
     if st != 201:
         raise RuntimeError(f"cannot create status issue: HTTP {st}: {data}")
@@ -400,6 +594,7 @@ def worker_loop(gh: GH, owner: str, llm_url: str, job: dict):
 
     t0 = last_act = last_hb = time.time()
     etag, seen, handled, count = None, {}, set(), 0
+    exec_cache = {}
     reason = "unknown"
     while True:
         now = time.time()
@@ -433,7 +628,7 @@ def worker_loop(gh: GH, owner: str, llm_url: str, job: dict):
                     comments = all_comments(gh, issue["number"])
                     if needs_reply(comments, owner, handled):
                         print(f"[worker] replying in #{issue['number']}", flush=True)
-                        reply_to(gh, issue["number"], comments, owner, llm_url, job, handled)
+                        reply_to(gh, issue["number"], comments, owner, llm_url, job, handled, exec_cache)
                         count += 1
                         last_act = time.time()
                     seen[issue["number"]] = issue["updated_at"]

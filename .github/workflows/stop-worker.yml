@@ -1,8 +1,15 @@
-name: Stop chat worker
+name: Stop worker / workspace
 
-# מבקש מה-worker להיסגר (הוא בודק את זה פעם בדקה).
+# מבקש מה-worker (המודל) ו/או מה-executor (סביבת העבודה) להיסגר. הם בודקים את זה פעם בדקה.
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "מה לעצור"
+        required: false
+        default: both
+        type: choice
+        options: [both, worker, executor]
 
 permissions:
   issues: write
@@ -15,10 +22,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          TARGET: ${{ inputs.target }}
         run: |
-          N=$(gh api "repos/$REPO/issues?state=open&sort=created&direction=asc&per_page=100" \
-              --jq '[.[] | select(.title=="[worker-status]")][0].number')
-          if [ -z "$N" ] || [ "$N" = "null" ]; then echo "אין worker פעיל"; exit 0; fi
-          BODY=$(printf 'Stop requested\n\n```json\n{"state": "stop", "ts": %s}\n```' "$(date +%s)")
-          gh api -X PATCH "repos/$REPO/issues/$N" -f body="$BODY" > /dev/null
-          echo "Stop requested on issue #$N"
+          stop_one() {
+            local title="$1"
+            local n
+            n=$(gh api "repos/$REPO/issues?state=open&sort=created&direction=asc&per_page=100" \
+                --jq "[.[] | select(.title==\"$title\")][0].number")
+            if [ -z "$n" ] || [ "$n" = "null" ]; then echo "$title: לא פעיל"; return; fi
+            local body
+            body=$(printf 'Stop requested\n\n```json\n{"state": "stop", "ts": %s}\n```' "$(date +%s)")
+            gh api -X PATCH "repos/$REPO/issues/$n" -f body="$body" > /dev/null
+            echo "$title: stop requested (#$n)"
+          }
+          if [ "$TARGET" != "executor" ]; then stop_one "[worker-status]"; fi
+          if [ "$TARGET" != "worker" ]; then stop_one "[executor-status]"; fi

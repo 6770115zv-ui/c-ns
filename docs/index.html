@@ -63,6 +63,17 @@ button:disabled{opacity:.5;cursor:default}
 .code iframe{width:100%;height:420px;border:0;border-top:1px solid var(--line);background:#fff}
 details.think{margin-top:8px;color:var(--muted);font-size:13px}
 details.think div{white-space:pre-wrap;margin-top:4px}
+.msg.tool{background:var(--panel2);border:1px dashed var(--line);padding:6px 12px;font-size:13px}
+.msg.tool summary{cursor:pointer;direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg.tool pre{margin:6px 0 0;padding:8px 10px;background:var(--code);border-radius:8px;overflow:auto;max-height:300px;direction:ltr;text-align:left;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.tool .lbl{color:var(--muted);font-size:11px;margin-top:6px}
+.grp{display:inline-flex;gap:6px;align-items:center}
+#top{flex-wrap:wrap}
+#files{max-width:760px}
+#fileList{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:4px;margin:8px 0}
+#fileList div{padding:3px 8px;cursor:pointer;border-radius:6px;direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:13px}
+#fileList div:hover{background:var(--panel2)}
+#fileView{max-height:340px;overflow:auto}
 .typing{color:var(--muted);align-self:flex-start;font-size:14px}
 .empty{color:var(--muted);text-align:center;margin-top:12vh}
 .empty h2{color:var(--text)}
@@ -102,9 +113,12 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
   <section id="main">
     <div id="top">
       <button id="menu" aria-label="תפריט">☰</button>
-      <span class="badge" id="workerBadge"><span class="dot"></span><span id="workerText">בודק…</span></span>
-      <button id="workerBtn">הפעל Worker</button>
+      <span class="grp"><span class="badge" id="workerBadge"><span class="dot"></span><span id="workerText">מודל…</span></span>
+      <button id="workerBtn">הפעל מודל</button></span>
+      <span class="grp"><span class="badge" id="executorBadge"><span class="dot"></span><span id="executorText">סביבה…</span></span>
+      <button id="executorBtn">הפעל סביבה</button></span>
       <span class="sp"></span>
+      <button id="filesBtn" aria-label="קבצים">📁 קבצים</button>
       <button id="settingsBtn" aria-label="הגדרות">⚙️</button>
     </div>
     <div id="chat"><div class="wrap" id="msgs"></div></div>
@@ -117,6 +131,17 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
     </div>
   </section>
 </div>
+
+<dialog id="files">
+  <h3 style="margin-top:0">קבצי סביבת העבודה</h3>
+  <small id="filesNote" style="color:var(--muted)">הקבצים מסונכרנים לענף <code>workspace</code> כל כמה דקות ובסיום.</small>
+  <div id="fileList"></div>
+  <div class="code" id="fileBox" style="display:none">
+    <div class="bar"><span id="fileName"></span><button id="fileCopy">העתק</button><button id="fileDl">הורד</button><button id="filePrev">תצוגה</button></div>
+    <pre id="fileView"></pre>
+  </div>
+  <div class="btns"><button id="filesClose">סגור</button> <a id="branchLink" target="_blank" rel="noopener" style="align-self:center;color:var(--accent)">פתח ב-GitHub</a></div>
+</dialog>
 
 <dialog id="settings">
   <h3 style="margin-top:0">הגדרות</h3>
@@ -139,7 +164,10 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
 <script>
 'use strict';
 const MARKER = '<!--llm-reply-->';
-const STATUS_TITLE = '[worker-status]';
+const KINDS = {
+  worker: { title: '[worker-status]', start: 'start-worker.yml', label: 'מודל' },
+  executor: { title: '[executor-status]', start: 'start-workspace.yml', label: 'סביבה' },
+};
 const $ = (s, el = document) => el.querySelector(s);
 
 const store = {
@@ -160,7 +188,7 @@ const S = {
   token: store.get('token', ''),
   issue: null, issues: [], comments: [], pending: [],
   etagC: null, etagI: null, lastKey: '',
-  worker: { no: null, state: '', ts: 0, online: false },
+  st: { worker: { no: null, state: '', ts: 0, online: false }, executor: { no: null, state: '', ts: 0, online: false } },
   sending: false, branch: null, timer: null,
 };
 const owner = () => (S.repo.split('/')[0] || '');
@@ -295,17 +323,52 @@ function parseReply(t) {
   return { text: t.trim(), meta, think };
 }
 
+const BOT = 'github-actions[bot]';
 function toMessages(list) {
-  const out = [];
+  const out = [], results = {};
   for (const c of list) {
     const b = c.body || '';
+    const m = b.match(/^<!--tool-result:([0-9a-f]+)-->\s*([\s\S]*)$/);
+    if (m && ((c.user && c.user.login) || '') === BOT) { try { results[m[1]] = JSON.parse(m[2]); } catch (e) { results[m[1]] = { ok: false, output: m[2] }; } }
+  }
+  for (const c of list) {
+    const b = c.body || '';
+    const login = (c.user && c.user.login) || '';
+    let m;
     if (b.startsWith(MARKER)) out.push({ role: 'assistant', id: c.id, ...parseReply(b.slice(MARKER.length)) });
-    else if (((c.user && c.user.login) || '').toLowerCase() === owner().toLowerCase()) out.push({ role: 'user', id: c.id, text: b, tmp: !!c.tmp });
+    else if (b.startsWith('<!--tool-result:')) continue;
+    else if ((m = b.match(/^<!--tool-call:([0-9a-f]+)-->\s*([\s\S]*)$/))) {
+      if (login !== BOT) continue;
+      let p = {}; try { p = JSON.parse(m[2]); } catch (e) {}
+      out.push({ role: 'tool', id: c.id, tool: p.tool || '?', args: p.args || {}, result: results[m[1]] || null });
+    }
+    else if (login.toLowerCase() === owner().toLowerCase()) out.push({ role: 'user', id: c.id, text: b, tmp: !!c.tmp });
   }
   return out;
 }
 
+function toolEl(m) {
+  const d = document.createElement('div'); d.className = 'msg tool';
+  const det = document.createElement('details');
+  const r = m.result, a = m.args || {};
+  const icon = !r ? '⏳' : r.ok ? '✓' : '✗';
+  let brief = '';
+  if (m.tool === 'bash') brief = String(a.command || '').split('\n')[0].slice(0, 90);
+  else brief = String(a.path || '');
+  const sum = document.createElement('summary'); sum.textContent = `${icon} ${m.tool}: ${brief}`; det.append(sum);
+  const add = (label, text) => {
+    const l = document.createElement('div'); l.className = 'lbl'; l.textContent = label;
+    const p = document.createElement('pre'); p.textContent = text; det.append(l, p);
+  };
+  if (m.tool === 'bash') add('פקודה', a.command || '');
+  else if (m.tool === 'write_file') add('תוכן הקובץ', a.content || '');
+  if (r) add(m.tool === 'bash' ? `פלט (exit ${r.exit}${r.ms ? ', ' + r.ms + 'ms' : ''})` : 'תוצאה', r.output || '');
+  d.append(det);
+  return d;
+}
+
 function msgEl(m) {
+  if (m.role === 'tool') return toolEl(m);
   const d = document.createElement('div');
   d.className = 'msg ' + m.role + (m.tmp ? ' tmp' : '');
   if (m.role === 'user') { d.dir = 'auto'; d.style.whiteSpace = 'pre-wrap'; d.textContent = m.text; return d; }
@@ -322,7 +385,7 @@ function msgEl(m) {
 
 function renderChat(forceScroll) {
   const all = S.comments.concat(S.pending);
-  const key = (S.issue ? S.issue.number : 0) + '|' + all.map(c => c.id + ':' + (c.body || '').length).join(',') + '|' + S.worker.online;
+  const key = (S.issue ? S.issue.number : 0) + '|' + all.map(c => c.id + ':' + (c.body || '').length).join(',') + '|' + S.st.worker.online + S.st.executor.online;
   if (key === S.lastKey && !forceScroll) return;
   S.lastKey = key;
   const box = $('#chat');
@@ -331,13 +394,14 @@ function renderChat(forceScroll) {
   const msgs = toMessages(all);
   if (!S.issue && !msgs.length) {
     const e = document.createElement('div'); e.className = 'empty';
-    e.innerHTML = '<h2>צ\'אט עם מודל על Kaggle</h2><div>כתוב הודעה כדי להתחיל שיחה חדשה.<br>אם ה-Worker כבוי, לחץ "הפעל Worker" (לוקח כמה דקות).</div>';
+    e.innerHTML = '<h2>צ\'אט עם מודל על Kaggle</h2><div>כתוב הודעה כדי להתחיל שיחה חדשה.<br>אם המודל כבוי, לחץ "הפעל מודל" (לוקח כמה דקות). "הפעל סביבה" נותן למודל להריץ קוד ולשמור קבצים.</div>';
     wrap.append(e);
   }
   msgs.forEach(m => wrap.append(msgEl(m)));
-  if (msgs.length && msgs[msgs.length - 1].role === 'user') {
+  const lastM = msgs[msgs.length - 1];
+  if (lastM && (lastM.role === 'user' || lastM.role === 'tool')) {
     const t = document.createElement('div'); t.className = 'typing';
-    t.textContent = S.worker.online ? '⏳ המודל חושב…' : '💤 ה-Worker כבוי. ההודעה תיענה כשיופעל.';
+    t.textContent = S.st.worker.online ? '⏳ המודל עובד…' : '💤 המודל כבוי. ההודעה תיענה כשיופעל.';
     wrap.append(t);
   }
   if (forceScroll || nearBottom) box.scrollTop = box.scrollHeight;
@@ -410,51 +474,88 @@ async function pollComments() {
   renderChat();
 }
 
-/* ---------------------------------------------------------------- Worker */
-function renderWorker() {
-  const on = S.worker.online;
-  $('#workerBadge').classList.toggle('on', on);
-  $('#workerText').textContent = on ? 'Worker מחובר' : 'Worker כבוי';
-  $('#workerBtn').textContent = on ? 'עצור Worker' : 'הפעל Worker';
+/* ---------------------------------------------------------------- Worker / Executor status */
+function renderStatus() {
+  for (const k of Object.keys(KINDS)) {
+    const on = S.st[k].online;
+    $('#' + k + 'Badge').classList.toggle('on', on);
+    $('#' + k + 'Text').textContent = KINDS[k].label + (on ? ' מחובר' : ' כבוי');
+    $('#' + k + 'Btn').textContent = (on ? 'עצור ' : 'הפעל ') + KINDS[k].label;
+  }
 }
 
-async function pollWorker() {
+async function pollStatus() {
   if (!S.repo) return;
   try {
-    if (!S.worker.no) {
+    if (Object.values(S.st).some(x => !x.no)) {
       const r = await gh('GET', repoPath('/issues?state=open&sort=created&direction=asc&per_page=100'));
-      if (r.status === 200) { const it = r.data.find(i => i.title === STATUS_TITLE); if (it) S.worker.no = it.number; }
+      if (r.status === 200) for (const k of Object.keys(KINDS)) { const it = r.data.find(i => i.title === KINDS[k].title); if (it) S.st[k].no = it.number; }
     }
-    if (S.worker.no) {
-      const r = await gh('GET', repoPath('/issues/' + S.worker.no));
-      if (r.status === 200) {
-        const m = (r.data.body || '').match(/\{[^{}]*\}/);
-        if (m) { const j = JSON.parse(m[0]); S.worker.state = j.state; S.worker.ts = j.ts; }
-      }
+    for (const k of Object.keys(KINDS)) {
+      const x = S.st[k];
+      if (!x.no) continue;
+      const r = await gh('GET', repoPath('/issues/' + x.no));
+      if (r.status !== 200) continue;
+      const m = (r.data.body || '').match(/\{[^{}]*\}/);
+      if (m) { const j = JSON.parse(m[0]); x.state = j.state; x.ts = j.ts; }
     }
   } catch (e) {}
-  S.worker.online = S.worker.state === 'online' && (Date.now() / 1000 - S.worker.ts) < 180;
-  renderWorker();
+  for (const k of Object.keys(KINDS)) { const x = S.st[k]; x.online = x.state === 'online' && (Date.now() / 1000 - x.ts) < 180; }
+  renderStatus();
 }
 
-async function dispatch(workflow) {
+async function dispatch(workflow, inputs) {
   if (!S.token) { openSettings(); return false; }
   if (!S.branch) {
     const r = await gh('GET', repoPath(''));
     S.branch = (r.data && r.data.default_branch) || 'main';
   }
-  const r = await gh('POST', repoPath(`/actions/workflows/${workflow}/dispatches`), { ref: S.branch });
+  const body = { ref: S.branch };
+  if (inputs) body.inputs = inputs;
+  const r = await gh('POST', repoPath(`/actions/workflows/${workflow}/dispatches`), body);
   if (r.status !== 204) { toast('ההפעלה נכשלה (' + r.status + '). בדוק הרשאת Actions בטוקן.'); return false; }
   return true;
 }
 
-async function toggleWorker() {
-  if (S.worker.online) {
-    if (await dispatch('stop-worker.yml')) toast('בקשת עצירה נשלחה (תיענה תוך כדקה)');
-  } else if (await dispatch('start-worker.yml')) {
-    toast('ההפעלה נשלחה. לוקח בערך 4-6 דקות עד שה-Worker מוכן.');
+async function toggle(kind) {
+  if (S.st[kind].online) {
+    if (await dispatch('stop-worker.yml', { target: kind })) toast('בקשת עצירה נשלחה (תיענה תוך כדקה)');
+  } else if (await dispatch(KINDS[kind].start)) {
+    toast(kind === 'worker' ? 'ההפעלה נשלחה. לוקח בערך 4-6 דקות עד שהמודל מוכן.' : 'ההפעלה נשלחה. לוקח בערך דקה-שתיים.');
     S.fast = Date.now() + 10 * 60 * 1000;
   }
+}
+
+/* ---------------------------------------------------------------- Files (workspace branch) */
+let fileCur = null;
+async function openFiles() {
+  const d = $('#files'); if (d.showModal) d.showModal(); else d.setAttribute('open', '');
+  $('#branchLink').href = `https://github.com/${S.repo}/tree/workspace`;
+  const list = $('#fileList'); list.textContent = 'טוען…'; $('#fileBox').style.display = 'none';
+  const r = await gh('GET', repoPath('/git/trees/workspace?recursive=1'));
+  list.textContent = '';
+  if (r.status === 404) { list.textContent = 'עדיין אין ענף workspace (ייווצר אחרי הסנכרון הראשון).'; return; }
+  if (r.status !== 200) { list.textContent = 'שגיאת GitHub ' + r.status; return; }
+  const files = (r.data.tree || []).filter(t => t.type === 'blob');
+  if (!files.length) list.textContent = 'אין קבצים.';
+  files.forEach(f => {
+    const row = document.createElement('div'); row.textContent = f.path + (f.size ? `  (${f.size}B)` : '');
+    row.addEventListener('click', () => showFile(f));
+    list.append(row);
+  });
+}
+
+async function showFile(f) {
+  if (f.size > 300000) { toast('הקובץ גדול מדי לתצוגה'); return; }
+  const r = await gh('GET', repoPath('/contents/' + f.path.split('/').map(encodeURIComponent).join('/') + '?ref=workspace'));
+  if (r.status !== 200) { toast('שגיאת GitHub ' + r.status); return; }
+  let text;
+  try { text = new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(atob(r.data.content.replace(/\n/g, '')), c => c.charCodeAt(0))); }
+  catch (e) { toast('הקובץ אינו טקסט'); return; }
+  fileCur = { name: f.path.split('/').pop(), text };
+  $('#fileName').textContent = f.path; $('#fileView').textContent = text; $('#fileBox').style.display = '';
+  $('#filePrev').style.display = /\.html?$/i.test(f.path) ? '' : 'none';
+  const old = $('#fileBox iframe'); if (old) old.remove();
 }
 
 /* ---------------------------------------------------------------- Sending */
@@ -507,14 +608,24 @@ function bind() {
   });
   $('#newChat').addEventListener('click', newChat);
   $('#menu').addEventListener('click', () => $('#side').classList.toggle('open'));
-  $('#workerBtn').addEventListener('click', toggleWorker);
+  $('#workerBtn').addEventListener('click', () => toggle('worker'));
+  $('#executorBtn').addEventListener('click', () => toggle('executor'));
+  $('#filesBtn').addEventListener('click', openFiles);
+  $('#filesClose').addEventListener('click', () => { const d = $('#files'); if (d.close) d.close(); else d.removeAttribute('open'); });
+  $('#fileCopy').addEventListener('click', async e => { try { await navigator.clipboard.writeText(fileCur.text); e.target.textContent = 'הועתק ✓'; setTimeout(() => (e.target.textContent = 'העתק'), 1500); } catch (err) { toast('ההעתקה נחסמה'); } });
+  $('#fileDl').addEventListener('click', () => fileCur && download(fileCur.name, fileCur.text));
+  $('#filePrev').addEventListener('click', () => {
+    const old = $('#fileBox iframe'); if (old) { old.remove(); return; }
+    const fr = document.createElement('iframe'); fr.setAttribute('sandbox', 'allow-scripts'); fr.setAttribute('referrerpolicy', 'no-referrer');
+    fr.style.cssText = 'width:100%;height:380px;border:0;background:#fff'; fr.srcdoc = fileCur.text; $('#fileBox').append(fr);
+  });
   $('#settingsBtn').addEventListener('click', openSettings);
   $('#closeSettings').addEventListener('click', closeSettings);
   $('#saveSettings').addEventListener('click', () => {
     S.repo = $('#repoIn').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\/$/, '');
     S.token = $('#tokenIn').value.trim();
     store.set('repo', S.repo); store.set('token', S.token);
-    S.worker = { no: null, state: '', ts: 0, online: false }; S.branch = null; S.etagI = null;
+    S.st = { worker: { no: null, state: '', ts: 0, online: false }, executor: { no: null, state: '', ts: 0, online: false } }; S.branch = null; S.etagI = null;
     closeSettings(); newChat(); boot();
   });
 }
@@ -522,7 +633,7 @@ function bind() {
 function schedule() {
   clearTimeout(S.timer);
   const waiting = S.pending.length || (S.comments.length && !(S.comments[S.comments.length - 1].body || '').startsWith(MARKER));
-  const fast = S.worker.online && waiting;
+  const fast = S.st.worker.online && waiting;
   const delay = document.hidden ? 30000 : fast ? 3000 : 8000;
   S.timer = setTimeout(async () => { try { await pollComments(); } catch (e) {} schedule(); }, delay);
 }
@@ -531,7 +642,7 @@ let tick = 0;
 async function slowLoop() {
   tick++;
   try {
-    await pollWorker();
+    await pollStatus();
     if (tick % 2 === 0) await loadIssues();
   } catch (e) {}
   const delay = (S.fast && Date.now() < S.fast) ? 10000 : (S.token ? 20000 : 90000);
@@ -539,7 +650,7 @@ async function slowLoop() {
 }
 
 async function boot() {
-  renderWorker(); renderChat(true);
+  renderStatus(); renderChat(true);
   if (!S.repo || !S.token) { openSettings(); }
   if (!S.repo) return;
   await loadIssues();
