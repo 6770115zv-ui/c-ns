@@ -338,14 +338,25 @@ def build_messages(comments, owner: str, system: str, max_chars: int = 36000):
     return head + msgs
 
 
-TOOLS = [
+SKILL_TOOLS = [
+    {"type": "function", "function": {
+        "name": "list_skills",
+        "description": "List installed skill packs and their descriptions. Use this before choosing a workflow.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "read_skill",
+        "description": "Load the full instructions for one installed skill by its exact name.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "Exact skill name returned by list_skills."}},
+            "required": ["name"]}}},
+]
+
+EXECUTOR_TOOLS = [
     {"type": "function", "function": {
         "name": "bash",
-        "description": "Run a bash command in the workspace (Linux, Python 3, Java 17, Node.js, gcc, git). "
-                       "Returns the exit code and combined stdout/stderr. Default timeout 120s, max 600s.",
+        "description": "Run a bash command in the workspace (Linux, Python 3, Java 17, Node.js, gcc, git). Returns exit code and combined output. Default timeout 120s, max 600s.",
         "parameters": {"type": "object", "properties": {
-            "command": {"type": "string", "description": "The shell command(s) to run."},
-            "timeout": {"type": "integer", "description": "Timeout in seconds."}}, "required": ["command"]}}},
+            "command": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["command"]}}},
     {"type": "function", "function": {
         "name": "write_file",
         "description": "Create or overwrite a text file. The path is relative to the workspace directory.",
@@ -354,13 +365,52 @@ TOOLS = [
     {"type": "function", "function": {
         "name": "read_file",
         "description": "Read a text file (path relative to the workspace). Output is truncated.",
-        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "list_files",
+        "description": "List files and folders in a workspace directory. Use path '.' for the workspace root.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "limit": {"type": "integer"}}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "search_files",
+        "description": "Search literal text in workspace text files recursively and return matching file names and line numbers.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "path": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "get_environment",
+        "description": "Inspect safe runtime facts such as OS, architecture, CPU, RAM, free disk, and installed tool versions. Never returns secrets or environment variables.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
 ]
 
+TOOLS = SKILL_TOOLS + EXECUTOR_TOOLS
+
+
+def skill_catalog_text(job: dict) -> str:
+    skills = job.get("skills") or {}
+    if not isinstance(skills, dict) or not skills:
+        return "אין כרגע חבילות Skills מותקנות."
+    rows = []
+    for name, item in sorted(skills.items()):
+        if isinstance(item, dict):
+            rows.append(f"- {name}: {item.get('description', '')}")
+    return "\n".join(rows)
+
+
+SKILL_HINT = (
+    "\n\nיש לך מערכת Skills מודולרית. תחילה השתמש ב-list_skills כדי לראות יכולות, "
+    "ואז ב-read_skill כדי לטעון את ההוראות המלאות של ה-Skill המתאים למשימה. "
+    "אל תטען חבילות שאינן רלוונטיות. Skills הם הוראות עבודה, לא הוכחה שיש כלי או הרשאה מסוימים."
+)
+
+
 AGENT_HINT = (
-    "\n\nיש לך סביבת עבודה אמיתית (Linux עם Python 3, Java 17, Node.js, gcc ו-git) והכלים bash, write_file, read_file. "
-    "הקבצים נשמרים בין שיחות. כתוב קבצים עם write_file ולא עם heredoc. הרץ ובדוק את הקוד שלך לפני שאתה מדווח שהוא עובד. "
-    "כשסיימת, ענה בעברית בקצרה מה עשית ואילו קבצים נוצרו, בלי להדביק קבצים שלמים בתשובה."
+    "\n\nיש לך סביבת עבודה אמיתית ב-Linux. הכלים הזמינים כוללים bash, write_file, read_file, "
+    "list_files, search_files ו-get_environment. הקבצים נשמרים בין שיחות. "
+    "השתמש ב-list_files כדי למפות תיקיות וב-search_files כדי לאתר הגדרות וקוד לפני שינוי. "
+    "כתוב קבצים עם write_file ולא עם heredoc. הרץ ובדוק את הקוד לפני שאתה מדווח שהוא עובד. "
+    "כשסיימת, ענה בעברית בקצרה מה עשית, אילו קבצים נוצרו ואילו בדיקות עברו, בלי להדביק קבצים שלמים בתשובה."
 )
 
 
@@ -463,14 +513,40 @@ def trim_agent_context(msgs: list, budget: int) -> None:
             cur -= 1
 
 
-def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinking: bool):
-    max_steps = int(job.get("max_steps", 15))
+def list_skill_packs(job: dict) -> dict:
+    skills = job.get("skills") or {}
+    if not isinstance(skills, dict):
+        skills = {}
+    items = []
+    for name, item in sorted(skills.items()):
+        if isinstance(item, dict):
+            items.append({"name": name, "description": str(item.get("description", ""))})
+    return {"ok": True, "exit": 0, "output": json.dumps(items, ensure_ascii=False, indent=2)}
+
+
+def read_skill_pack(job: dict, name: str) -> dict:
+    skills = job.get("skills") or {}
+    item = skills.get(name) if isinstance(skills, dict) else None
+    if not isinstance(item, dict):
+        return {"ok": False, "exit": 1, "output": f"Skill לא נמצא: {name}. השתמש ב-list_skills."}
+    content = str(item.get("content", ""))
+    if len(content) > 16000:
+        content = content[:16000] + "\n...[skill truncated]"
+    return {"ok": True, "exit": 0, "output": f"# {name}\n{content}"}
+
+
+def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinking: bool,
+               available_tools=None):
+    max_steps = max(1, min(int(job.get("max_steps", 15)), 30))
     max_tokens = int(job.get("max_tokens", 6000))
     budget = context_budget(job)
+    available_tools = available_tools if available_tools is not None else TOOLS
+    local_tools = {"list_skills", "read_skill"}
+    allowed = {x["function"]["name"] for x in available_tools}
     steps, completion = 0, 0
     while True:
         trim_agent_context(msgs, budget)
-        d = chat_full(llm_url, msgs, max_tokens, thinking, TOOLS)
+        d = chat_full(llm_url, msgs, max_tokens, thinking, available_tools)
         completion += int(d["usage"].get("completion_tokens", 0) or 0)
         calls = d["tool_calls"]
         if not calls or steps >= max_steps:
@@ -491,7 +567,16 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
             if not isinstance(args, dict):
                 args = {}
             print(f"[worker] tool {name} in #{number}", flush=True)
-            res = call_tool(gh, number, name, args)
+            if name not in allowed:
+                res = {"ok": False, "exit": 1, "output": f"Tool לא זמין: {name}"}
+            elif name == "list_skills":
+                res = list_skill_packs(job)
+            elif name == "read_skill":
+                res = read_skill_pack(job, str(args.get("name", "")))
+            elif name in local_tools:
+                res = {"ok": False, "exit": 1, "output": "Unknown local skill tool"}
+            else:
+                res = call_tool(gh, number, name, args)
             msgs.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": model_view(res, name)})
             steps += 1
 
@@ -510,18 +595,27 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         thinking = True
         msgs[-1]["content"] = msgs[-1]["content"][len("/think"):].strip() or "המשך."
 
-    use_tools = bool(job.get("tools", True)) and executor_online(gh, exec_cache if exec_cache is not None else {})
+    active_tools = list(SKILL_TOOLS) if job.get("skills") else []
+    executor_ready = bool(job.get("tools", True)) and executor_online(
+        gh, exec_cache if exec_cache is not None else {})
+    if executor_ready:
+        active_tools.extend(EXECUTOR_TOOLS)
+    use_tools = bool(active_tools)
     if use_tools:
+        hint = SKILL_HINT + "\n\nחבילות Skills זמינות:\n" + skill_catalog_text(job)
+        if executor_ready:
+            hint += AGENT_HINT
         if msgs and msgs[0]["role"] == "system":
-            msgs[0]["content"] += AGENT_HINT
+            msgs[0]["content"] += hint
         else:
-            msgs.insert(0, {"role": "system", "content": AGENT_HINT.strip()})
+            msgs.insert(0, {"role": "system", "content": hint.strip()})
 
     t0 = time.time()
     reasoning, usage, finish, steps = "", {}, None, 0
     try:
         if use_tools:
-            text, reasoning, usage, finish, steps = agent_loop(gh, number, msgs, llm_url, job, thinking)
+            text, reasoning, usage, finish, steps = agent_loop(
+                gh, number, msgs, llm_url, job, thinking, active_tools)
         else:
             text, reasoning, usage, finish = chat(llm_url, msgs, int(job.get("max_tokens", 6000)), thinking)
     except Exception as e:  # noqa: BLE001
