@@ -1,0 +1,160 @@
+name: Security source research (Kaggle)
+
+# Manual, read-only source audit. Detailed reports are not uploaded by default:
+# this repository is public and findings may contain unpublished vulnerabilities.
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "Public GitHub source repository (owner/name)"
+        required: true
+        default: "torvalds/linux"
+        type: string
+      target_ref:
+        description: "Branch or tag to audit"
+        required: true
+        default: "master"
+        type: string
+      target_subdir:
+        description: "Repository subdirectory to focus on ('.' = whole tree)"
+        required: false
+        default: "drivers"
+        type: string
+      research_prompt:
+        description: "Research objective"
+        required: false
+        default: "Perform a deep, read-only security review of the selected Linux Kernel subsystem. Prioritize memory lifetime, race conditions, integer/bounds errors, user/kernel boundary validation, and privilege checks. Trace each suspected issue through callers and data structures. Do not treat API usage alone as a bug. Return only evidence-backed candidates with exact file and line references, severity, confidence, root cause, impact, and safe remediation. Clearly distinguish unverified candidates from confirmed defects."
+        type: string
+      model_repo:
+        description: "Hugging Face GGUF repository"
+        required: true
+        default: "unsloth/Qwen3.8-27B-GGUF"
+        type: string
+      model_pattern:
+        description: "GGUF file pattern"
+        required: true
+        default: "*UD-Q4_K_M*"
+        type: string
+      ctx:
+        description: "Context size (start with 16384 for dual T4)"
+        required: true
+        default: "16384"
+        type: string
+      max_tokens:
+        description: "Maximum completion tokens per model turn"
+        required: true
+        default: "3072"
+        type: string
+      max_steps:
+        description: "Maximum read-only research tool calls (1-80)"
+        required: true
+        default: "40"
+        type: string
+      thinking:
+        description: "Enable model reasoning"
+        required: true
+        default: true
+        type: boolean
+      accelerator:
+        description: "Kaggle accelerator"
+        required: true
+        default: "NvidiaTeslaT4"
+        type: string
+      publish_report:
+        description: "Upload detailed report as a GitHub artifact. WARNING: this repository is public."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-research-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Kaggle CLI
+        run: python -m pip install --disable-pip-version-check -q kaggle
+
+      - name: Push private research kernel to Kaggle
+        id: push
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          RELEASE_REPO: ${{ github.repository }}
+          IN_TARGET_REPO: ${{ inputs.target_repo }}
+          IN_TARGET_REF: ${{ inputs.target_ref }}
+          IN_TARGET_SUBDIR: ${{ inputs.target_subdir }}
+          IN_RESEARCH_PROMPT: ${{ inputs.research_prompt }}
+          IN_MODEL_REPO: ${{ inputs.model_repo }}
+          IN_MODEL_PATTERN: ${{ inputs.model_pattern }}
+          IN_CTX: ${{ inputs.ctx }}
+          IN_MAX_TOKENS: ${{ inputs.max_tokens }}
+          IN_MAX_STEPS: ${{ inputs.max_steps }}
+          IN_THINKING: ${{ inputs.thinking }}
+          IN_ACCELERATOR: ${{ inputs.accelerator }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: python scripts/push_security_research.py
+
+      - name: Wait for Kaggle research run
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+        run: python scripts/wait_kaggle.py
+
+      - name: Download research output
+        if: always() && steps.push.outputs.ref != ''
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KERNEL_REF: ${{ steps.push.outputs.ref }}
+        run: |
+          mkdir -p out
+          kaggle kernels output "$KERNEL_REF" -p out || true
+          echo "Downloaded output files:"
+          find out -maxdepth 2 -type f -printf '%P (%s bytes)\n' | sort
+
+      - name: Upload detailed research report
+        if: always() && inputs.publish_report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-research-report
+          path: |
+            out/security-research-report.md
+            out/research-metadata.json
+            out/result.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Write run summary
+        if: always()
+        env:
+          PUBLISH_REPORT: ${{ inputs.publish_report }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          {
+            echo "## Security source research"
+            echo
+            echo "- Target: $TARGET_REPO@$TARGET_REF"
+            echo "- Analysis mode: read-only source inspection; target code is not executed or modified."
+            echo
+            if [ "$PUBLISH_REPORT" = "true" ]; then
+              echo "The detailed report was offered as a GitHub artifact. **This repository is public: review disclosure risk before sharing the artifact.**"
+            else
+              echo "**Detailed report upload was disabled.** It was downloaded only into the temporary Actions runner and will not be retained after this run."
+              echo "To keep findings private, do not enable artifact upload in this public repository; use a private report destination."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
