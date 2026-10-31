@@ -356,7 +356,27 @@ def test_skills():
     assert "list_skills" in tool_names and "inspect_compute" in tool_names
     compute = ns["inspect_compute"]({"model_repo": "test/model", "ctx": 8192})
     assert compute["ok"] and "Model repository: test/model" in compute["output"], compute
-    print("skills and compute diagnostics ok")
+    assert "web_search" in tool_names
+    original_get = ns["requests"].get
+
+    class SearchResponse:
+        text = (
+            '<a class="result__a" href="https://example.org/docs">Example docs</a>'
+            '<a class="result__snippet" href="#">Official reference</a>'
+            '<a class="result__a" href="https://example.org/guide">Example guide</a>'
+            '<div class="result__snippet">Getting started</div>'
+        )
+        def raise_for_status(self):
+            pass
+
+    ns["requests"].get = lambda *a, **k: SearchResponse()
+    try:
+        search = ns["web_search"]("example docs", 2)
+        assert search["ok"] and "https://example.org/docs" in search["output"]
+        assert "Official reference" in search["output"], search
+    finally:
+        ns["requests"].get = original_get
+    print("skills, compute diagnostics and web search ok")
 
 
 def test_executor_unit():
