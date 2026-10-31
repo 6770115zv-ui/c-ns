@@ -59,7 +59,8 @@ Actions → **Run on Kaggle** → כתוב prompt (והגדל `max_tokens` לד�
 - `bash`, `write_file`, `read_file`.
 - `list_files` למיפוי תיקיות.
 - `search_files` לחיפוש טקסט בקבצים.
-- `get_environment` לקבלת פרטי OS, ארכיטקטורה, CPU, RAM, דיסק וגרסאות כלים — בלי להחזיר משתני סביבה או סודות.
+- `get_environment` לקבלת פרטי סביבת ה-GitHub Actions executor — OS, ארכיטקטורה, CPU, RAM, דיסק וגרסאות כלים.
+- `inspect_compute` הוא כלי מקומי של ה-Kaggle worker: מדווח על GPU/VRAM, RAM, דיסקים, הגדרות המודל ומצב llama-server, בלי להחזיר credentials.
 
 ה-Skills הם הוראות עבודה בלבד; הם אינם מעניקים הרשאות חדשות. פעולות קבצים ופקודות עדיין עוברות דרך שכבת ה-executor. לאחר שינוי Skills או כלים, יש להפעיל מחדש את ה-worker ואת ה-executor כדי שהריצות החדשות יטענו את הקוד המעודכן. ריצות שכבר פעילות ממשיכות עם הגרסה שאיתה התחילו.
 
