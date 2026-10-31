@@ -352,8 +352,11 @@ def test_skills():
     assert good["ok"] and "Reproduce" in good["output"], good
     bad = ns["read_skill_pack"]({"skills": skills}, "missing")
     assert not bad["ok"] and "list_skills" in bad["output"], bad
-    assert "list_skills" in [x["function"]["name"] for x in ns["TOOLS"]]
-    print("skills ok")
+    tool_names = [x["function"]["name"] for x in ns["TOOLS"]]
+    assert "list_skills" in tool_names and "inspect_compute" in tool_names
+    compute = ns["inspect_compute"]({"model_repo": "test/model", "ctx": 8192})
+    assert compute["ok"] and "Model repository: test/model" in compute["output"], compute
+    print("skills and compute diagnostics ok")
 
 
 def test_executor_unit():
