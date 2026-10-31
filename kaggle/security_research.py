@@ -10,6 +10,7 @@ import runner_lib as base
 
 JOB = globals().get("JOB", {})
 SOURCE_ROOT = None
+ALLOWED_SCOPE = "."
 MAX_TOOL_OUTPUT = 12000
 TEXT_SUFFIXES = {
     ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".S", ".s", ".rs", ".go",
@@ -84,13 +85,16 @@ def validate_ref(value):
 
 def safe_relative_path(value):
     if value in (None, "", "."):
-        return "."
+        return ALLOWED_SCOPE
     if not isinstance(value, str) or len(value) > 500:
         raise ValueError("Invalid source path")
     p = Path(value)
     if p.is_absolute() or any(part in ("..", "") for part in p.parts):
         raise ValueError("Source path must stay inside the repository")
-    return p.as_posix()
+    rel = p.as_posix()
+    if ALLOWED_SCOPE != "." and rel != ALLOWED_SCOPE and not rel.startswith(ALLOWED_SCOPE + "/"):
+        raise ValueError(f"Path is outside the selected audit scope: {ALLOWED_SCOPE}")
+    return rel
 
 def run_git(args, timeout=60):
     if SOURCE_ROOT is None:
@@ -241,6 +245,7 @@ def dispatch_tool(name, args, meta):
     return {"ok": False, "output": f"Tool not available: {name}"}
 
 def run_research_agent(job, repo, ref, file_count):
+    global ALLOWED_SCOPE
     prompt = (job.get("research_prompt") or "").strip()
     if not prompt:
         prompt = (
@@ -253,6 +258,7 @@ def run_research_agent(job, repo, ref, file_count):
         scope = safe_relative_path(scope)
     except ValueError as exc:
         raise ValueError(f"Invalid target_subdir: {exc}")
+    ALLOWED_SCOPE = scope
     meta = source_metadata(repo, ref, file_count)["output"]
     if scope != ".":
         candidate = (SOURCE_ROOT / scope).resolve()
