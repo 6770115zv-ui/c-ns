@@ -19,6 +19,38 @@ def run(cmd):
     return res.returncode, out
 
 
+def load_skills() -> dict:
+    """Load repository SKILL.md files and embed them in the Kaggle kernel payload."""
+    root = pathlib.Path("skills")
+    skills = {}
+    if not root.is_dir():
+        return skills
+    for path in sorted(root.glob("*/SKILL.md")):
+        raw = path.read_text(encoding="utf-8")
+        name = path.parent.name
+        description = ""
+        body = raw
+        match = re.match(r"\A---\s*\n(.*?)\n---\s*\n?(.*)\Z", raw, re.S)
+        if match:
+            for line in match.group(1).splitlines():
+                key, sep, value = line.partition(":")
+                if sep and key.strip() == "name":
+                    name = value.strip()
+                elif sep and key.strip() == "description":
+                    description = value.strip()
+            body = match.group(2).strip()
+        skills[name] = {
+            "name": name,
+            "description": description or name.replace("-", " "),
+            "content": body,
+        }
+    total = sum(len(item["content"]) for item in skills.values())
+    if total > 160_000:
+        raise ValueError(f"Skill bundle too large: {total} characters (limit 160000)")
+    print(f"[skills] loaded {len(skills)} skill packs ({total} chars)", flush=True)
+    return skills
+
+
 def build_dir(user: str, slug: str, job: dict) -> pathlib.Path:
     push_dir = pathlib.Path("/tmp/kaggle-push")
     shutil.rmtree(push_dir, ignore_errors=True)
@@ -68,6 +100,7 @@ def main() -> None:
         "max_tokens": int(os.environ.get("IN_MAX_TOKENS") or 1024),
         "thinking": os.environ.get("IN_THINKING", "false").lower() == "true",
         "release_repo": os.environ["RELEASE_REPO"],
+        "skills": load_skills(),
     }
     if mode == "worker":
         job.update({
