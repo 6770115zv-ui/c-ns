@@ -46,18 +46,18 @@ def build_dir(user, slug, job):
     push_dir.mkdir(parents=True)
     runner_src = pathlib.Path("kaggle/runner.py").read_text(encoding="utf-8")
     research_src = pathlib.Path("kaggle/security_research.py").read_text(encoding="utf-8")
-    main_guard = '\\nif __name__ == "__main__":\\n    main()\\n'
+    main_guard = '\nif __name__ == "__main__":\n    main()\n'
     if main_guard not in runner_src:
         raise ValueError("Could not find the standard runner main guard")
     runner_src = runner_src.rsplit(main_guard, 1)[0]
     research_src = research_src.replace(
         "import runner_lib as base",
-        "import sys\\nbase = sys.modules[\"__main__\"]",
+        "import sys\nbase = sys.modules[\"__main__\"]",
         1,
     )
     # Kaggle executes one script file; bundle the shared model runtime and
     # the read-only audit agent into that file instead of relying on sidecars.
-    bundled = "JOB = " + repr(job) + "\\n\\n" + runner_src + "\\n\\n" + research_src
+    bundled = "JOB = " + repr(job) + "\n\n" + runner_src + "\n\n" + research_src
     (push_dir / "security_research.py").write_text(bundled, encoding="utf-8")
     metadata = {
         "id": f"{user}/{slug}",
