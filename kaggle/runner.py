@@ -353,6 +353,12 @@ SKILL_TOOLS = [
         "name": "inspect_compute",
         "description": "Inspect this Kaggle kernel's actual CPU, GPU/VRAM, RAM, free disk, loaded model settings, and local inference server health. It does not expose credentials.",
         "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "Search the public web using DuckDuckGo and return a small set of result titles, URLs, and snippets. Treat results as leads; open and verify sources before relying on them.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["query"]}}},
 ]
 
 EXECUTOR_TOOLS = [
@@ -405,7 +411,7 @@ def skill_catalog_text(job: dict) -> str:
 SKILL_HINT = (
     "\n\nיש לך מערכת Skills מודולרית. תחילה השתמש ב-list_skills כדי לראות יכולות, "
     "ואז ב-read_skill כדי לטעון את ההוראות המלאות של ה-Skill המתאים למשימה. "
-    "אל תטען חבילות שאינן רלוונטיות. השתמש ב-inspect_compute כשצריך נתוני חומרה עדכניים מתוך Kaggle. "
+    "אל תטען חבילות שאינן רלוונטיות. השתמש ב-inspect_compute לנתוני חומרה עדכניים וב-web_search לחיפוש ראשוני ברשת. "
     "Skills הם הוראות עבודה, לא הוכחה שיש כלי או הרשאה מסוימים."
 )
 
@@ -518,6 +524,63 @@ def trim_agent_context(msgs: list, budget: int) -> None:
             cur -= 1
 
 
+def web_search(query: str, limit: int = 5) -> dict:
+    """Search the public web; search snippets are leads, not verified evidence."""
+    from html import unescape
+    from urllib.parse import parse_qs, urlparse
+
+    if not isinstance(query, str) or not query.strip():
+        return {"ok": False, "exit": 1, "output": "חסר query"}
+    query = query.strip()[:500]
+    try:
+        limit = max(1, min(int(limit or 5), 8))
+    except (TypeError, ValueError):
+        limit = 5
+    try:
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={"User-Agent": "Mozilla/5.0 (compatible; WorkspaceAgent/1.0)"},
+            timeout=15)
+        response.raise_for_status()
+        page = response.text
+    except requests.RequestException as e:
+        return {"ok": False, "exit": 1, "output": f"חיפוש הרשת נכשל: {type(e).__name__}: {e}"}
+
+    anchors = list(re.finditer(
+        r'<a\b(?=[^>]*class=["\'][^"\']*\bresult__a\b[^"\']*["\'])[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+        page, re.I | re.S))
+    results = []
+    for i, match in enumerate(anchors):
+        if len(results) >= limit:
+            break
+        href = unescape(match.group(1))
+        title = unescape(re.sub(r"<[^>]+>", " ", match.group(2)))
+        title = re.sub(r"\s+", " ", title).strip()
+        parsed = urlparse(href)
+        params = parse_qs(parsed.query)
+        if "uddg" in params:
+            href = params["uddg"][0]
+        if not href.startswith(("http://", "https://")) or not title:
+            continue
+        end = anchors[i + 1].start() if i + 1 < len(anchors) else min(len(page), match.end() + 1800)
+        tail = page[match.end():end]
+        snip = re.search(
+            r'<(?:a|div|span)\b(?=[^>]*class=["\'][^"\']*\bresult__snippet\b[^"\']*["\'])[^>]*>(.*?)</(?:a|div|span)>',
+            tail, re.I | re.S)
+        snippet = ""
+        if snip:
+            snippet = unescape(re.sub(r"<[^>]+>", " ", snip.group(1)))
+            snippet = re.sub(r"\s+", " ", snippet).strip()
+        results.append({"title": title[:240], "url": href, "snippet": snippet[:500]})
+    if not results:
+        return {"ok": False, "exit": 1, "output": "לא התקבלו תוצאות שניתן לפענח; ייתכן שמנוע החיפוש חסם את הבקשה או שפורמט הדף השתנה."}
+    lines = [f"נמצאו {len(results)} תוצאות (תקצירים בלבד — יש לפתוח ולאמת את המקורות):"]
+    for n, item in enumerate(results, 1):
+        lines.append(f"{n}. {item['title']}\n   {item['url']}\n   {item['snippet']}")
+    return {"ok": True, "exit": 0, "output": "\n".join(lines)}
+
+
 def inspect_compute(job: dict) -> dict:
     """Return safe hardware and inference diagnostics from the Kaggle kernel itself."""
     import platform
@@ -597,7 +660,7 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
     max_tokens = int(job.get("max_tokens", 6000))
     budget = context_budget(job)
     available_tools = available_tools if available_tools is not None else TOOLS
-    local_tools = {"list_skills", "read_skill", "inspect_compute"}
+    local_tools = {"list_skills", "read_skill", "inspect_compute", "web_search"}
     allowed = {x["function"]["name"] for x in available_tools}
     steps, completion = 0, 0
     while True:
@@ -631,6 +694,8 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
                 res = read_skill_pack(job, str(args.get("name", "")))
             elif name == "inspect_compute":
                 res = inspect_compute(job)
+            elif name == "web_search":
+                res = web_search(str(args.get("query", "")), args.get("limit", 5))
             elif name in local_tools:
                 res = {"ok": False, "exit": 1, "output": "Unknown local skill tool"}
             else:
