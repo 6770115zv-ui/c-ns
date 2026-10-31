@@ -349,6 +349,10 @@ SKILL_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string", "description": "Exact skill name returned by list_skills."}},
             "required": ["name"]}}},
+    {"type": "function", "function": {
+        "name": "inspect_compute",
+        "description": "Inspect this Kaggle kernel's actual CPU, GPU/VRAM, RAM, free disk, loaded model settings, and local inference server health. It does not expose credentials.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
 ]
 
 EXECUTOR_TOOLS = [
@@ -401,7 +405,8 @@ def skill_catalog_text(job: dict) -> str:
 SKILL_HINT = (
     "\n\nיש לך מערכת Skills מודולרית. תחילה השתמש ב-list_skills כדי לראות יכולות, "
     "ואז ב-read_skill כדי לטעון את ההוראות המלאות של ה-Skill המתאים למשימה. "
-    "אל תטען חבילות שאינן רלוונטיות. Skills הם הוראות עבודה, לא הוכחה שיש כלי או הרשאה מסוימים."
+    "אל תטען חבילות שאינן רלוונטיות. השתמש ב-inspect_compute כשצריך נתוני חומרה עדכניים מתוך Kaggle. "
+    "Skills הם הוראות עבודה, לא הוכחה שיש כלי או הרשאה מסוימים."
 )
 
 
@@ -513,6 +518,56 @@ def trim_agent_context(msgs: list, budget: int) -> None:
             cur -= 1
 
 
+def inspect_compute(job: dict) -> dict:
+    """Return safe hardware and inference diagnostics from the Kaggle kernel itself."""
+    import platform
+    import shutil
+
+    facts = [
+        f"Runtime: {platform.system()} {platform.release()} ({platform.machine()})",
+        f"CPU cores visible: {os.cpu_count()}",
+        f"Model repository: {job.get('model_repo', 'unknown')}",
+        f"Model file pattern: {job.get('model_pattern', 'unknown')}",
+        f"Context setting: {job.get('ctx', 'default')}",
+    ]
+    try:
+        with open("/proc/meminfo", encoding="ascii", errors="replace") as fh:
+            mem = next((line for line in fh if line.startswith("MemTotal:")), "")
+        if mem:
+            facts.append("System RAM: " + mem.split(":", 1)[1].strip())
+    except OSError:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="ascii", errors="replace") as fh:
+            mem = next((line for line in fh if line.startswith("MemAvailable:")), "")
+        if mem:
+            facts.append("Available RAM: " + mem.split(":", 1)[1].strip())
+    except OSError:
+        pass
+    try:
+        gpu = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.free,driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=8)
+        if gpu.returncode == 0 and gpu.stdout.strip():
+            facts.append("GPU(s):\n" + gpu.stdout.strip())
+        else:
+            facts.append("GPU: nvidia-smi unavailable (" + (gpu.stderr or "no GPU details")[:180].strip() + ")")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        facts.append(f"GPU: unavailable ({e})")
+    for path in (OUT, "/kaggle/temp", "/tmp"):
+        try:
+            usage = shutil.disk_usage(path)
+            facts.append(f"Disk {path}: total {usage.total // (1024**3)} GiB, free {usage.free // (1024**3)} GiB")
+        except OSError:
+            pass
+    try:
+        response = requests.get(LLM_URL + "/health", timeout=3)
+        facts.append(f"llama-server health: HTTP {response.status_code}")
+    except requests.RequestException as e:
+        facts.append(f"llama-server health: unavailable ({type(e).__name__})")
+    return {"ok": True, "exit": 0, "output": "\n".join(facts)}
+
+
 def list_skill_packs(job: dict) -> dict:
     skills = job.get("skills") or {}
     if not isinstance(skills, dict):
@@ -541,7 +596,7 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
     max_tokens = int(job.get("max_tokens", 6000))
     budget = context_budget(job)
     available_tools = available_tools if available_tools is not None else TOOLS
-    local_tools = {"list_skills", "read_skill"}
+    local_tools = {"list_skills", "read_skill", "inspect_compute"}
     allowed = {x["function"]["name"] for x in available_tools}
     steps, completion = 0, 0
     while True:
@@ -573,6 +628,8 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
                 res = list_skill_packs(job)
             elif name == "read_skill":
                 res = read_skill_pack(job, str(args.get("name", "")))
+            elif name == "inspect_compute":
+                res = inspect_compute(job)
             elif name in local_tools:
                 res = {"ok": False, "exit": 1, "output": "Unknown local skill tool"}
             else:
