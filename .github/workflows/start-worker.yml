@@ -59,7 +59,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Kaggle CLI
-        run: pip install -q kaggle
+        run: pip install -q kaggle six
 
       - name: Push worker kernel to Kaggle
         id: push
