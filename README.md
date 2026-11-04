@@ -2,7 +2,7 @@
 
 מודל שפה (Qwen3.6-35B-A3B) שרץ על GPU חינמי של Kaggle, כשהכול מופעל ומנוהל מ-GitHub:
 - **Run on Kaggle** – משימה אחת, תשובה ב-Summary, קבצי קוד שחולצו עם קישור הורדה.
-- **צ'אט** – דף ב-GitHub Pages. ההודעות נשמרות כתגובות ב-Issues, וworker ב-Kaggle עונה להן.
+- **צ'אט עם Streaming** – המודל מזרים טוקנים דרך ממשק ה-LLM, וה-worker מעדכן את תגובת ה-Issue תוך כדי. הדף מציג את התשובה בהדרגה באמצעות polling קצר בזמן יצירה.
 - **סביבות עבודה** – Linux Workspace עם הרשאות root ו-Windows Workspace עם הרשאות Administrator, כל אחת עם ענף קבצים נפרד.
 
 ## התקנה חד-פעמית
