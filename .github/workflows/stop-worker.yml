@@ -19,9 +19,9 @@ jobs:
     steps:
       - name: Request stop
         env:
-          GH_TOKEN: \${{ github.token }}
-          REPO: \${{ github.repository }}
-          TARGET: \${{ inputs.target }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TARGET: ${{ inputs.target }}
         run: |
           stop_one() {
             local title="$1"
