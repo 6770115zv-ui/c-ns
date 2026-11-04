@@ -26,6 +26,7 @@ LLM_URL = "http://127.0.0.1:8080"
 MARKER = "<!--llm-reply-->"
 STATUS_TITLE = "[worker-status]"
 EXECUTOR_TITLE = "[executor-status]"
+WINDOWS_EXECUTOR_TITLE = "[windows-executor-status]"
 BOT_LOGIN = "github-actions[bot]"
 FOOTER_RE = re.compile(r"\n\n<sub>.*?</sub>\s*$", re.S)
 DETAILS_RE = re.compile(r"<details>.*?</details>", re.S)
@@ -361,6 +362,18 @@ SKILL_TOOLS = [
             "required": ["query"]}}},
 ]
 
+WINDOWS_EXECUTOR_TOOLS = [
+    {"type": "function", "function": {
+        "name": "win_powershell",
+        "description": "Run a PowerShell command on the connected Windows GitHub Actions runner. The process runs with the runner account's Administrator token and inherits the workflow environment, including available secrets. Work in the current Windows Workspace directory. Default timeout 120 seconds, maximum 600.",
+        "parameters": {"type": "object", "properties": {
+            "command": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["command"]}}},
+    {"type": "function", "function": {
+        "name": "win_get_environment",
+        "description": "Inspect the connected Windows runner, current account, Administrator-token status, CPU, Python and Workspace path. Does not print environment variables or secret values.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+]
+
 EXECUTOR_TOOLS = [
     {"type": "function", "function": {
         "name": "bash",
@@ -434,7 +447,7 @@ def context_budget(job: dict) -> int:
     return max(6000, int((ctx - mt - 800) * 2.2))
 
 
-def executor_online(gh: GH, cache: dict) -> bool:
+def executor_online(gh: GH, cache: dict, title: str = EXECUTOR_TITLE) -> bool:
     """האם סביבת העבודה (executor) מחוברת כרגע. בודק לכל היותר פעם ב-15 שניות."""
     now = time.time()
     if now - cache.get("checked", 0) < 15:
@@ -443,7 +456,7 @@ def executor_online(gh: GH, cache: dict) -> bool:
     online = False
     try:
         if not cache.get("no"):
-            cache["no"] = find_status_issue(gh, EXECUTOR_TITLE)
+            cache["no"] = find_status_issue(gh, title)
         if cache.get("no"):
             st, data, _ = gh.call("GET", f"/issues/{cache['no']}")
             m = re.search(r"\{[^{}]*\}", (data or {}).get("body") or "")
@@ -468,7 +481,7 @@ def call_tool(gh: GH, number: int, name: str, args: dict, poll: float = 2.0) -> 
     since = data.get("created_at")
     t = args.get("timeout") if isinstance(args, dict) else None
     try:
-        wait = (min(int(t), 600) if t else 120) + 90 if name == "bash" else 120
+        wait = (min(int(t), 600) if t else 120) + 90 if name in ("bash", "win_powershell") else 120
     except (TypeError, ValueError):
         wait = 210
     deadline = time.time() + wait
@@ -719,15 +732,20 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         msgs[-1]["content"] = msgs[-1]["content"][len("/think"):].strip() or "המשך."
 
     active_tools = list(SKILL_TOOLS) if job.get("skills") else []
-    executor_ready = bool(job.get("tools", True)) and executor_online(
-        gh, exec_cache if exec_cache is not None else {})
+    executor_cache = exec_cache if exec_cache is not None else {}
+    executor_ready = bool(job.get("tools", True)) and executor_online(gh, executor_cache)
+    windows_ready = bool(job.get("tools", True)) and executor_online(gh, executor_cache.setdefault("windows", {}), WINDOWS_EXECUTOR_TITLE)
     if executor_ready:
         active_tools.extend(EXECUTOR_TOOLS)
+    if windows_ready:
+        active_tools.extend(WINDOWS_EXECUTOR_TOOLS)
     use_tools = bool(active_tools)
     if use_tools:
         hint = SKILL_HINT + "\n\nחבילות Skills זמינות:\n" + skill_catalog_text(job)
         if executor_ready:
             hint += AGENT_HINT
+        if windows_ready:
+            hint += "\n\nיש לך גם Windows Workspace מחובר. השתמש ב-win_get_environment לבדיקת מצב והרשאות Administrator וב-win_powershell להרצת פקודות PowerShell. סביבת Windows נפרדת מסביבת Linux; הקבצים שלה נשמרים בענף workspace-windows. פקודות Windows רצות בהרשאות Administrator ויורשות את סביבת ה-executor, לרבות GH_TOKEN אם הוגדר; אל תדפיס סודות."
         if msgs and msgs[0]["role"] == "system":
             msgs[0]["content"] += hint
         else:
