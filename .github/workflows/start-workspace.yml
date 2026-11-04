@@ -24,7 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     steps:
-      # בלי שמירת האישורים ב-.git: המשתמש המבודד לא צריך (ולא יכול) למצוא טוקן
+      # Workspace commands run as root and inherit this step environment, including GH_TOKEN.
+      # Treat all commands requested by the model as fully privileged code on this runner.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
