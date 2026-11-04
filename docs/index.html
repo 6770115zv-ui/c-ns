@@ -21,6 +21,8 @@ button{font:inherit;color:inherit;background:var(--panel2);border:1px solid var(
 button:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.primary:hover{background:var(--accent2)}
+button.mode{white-space:nowrap}
+button.mode.active{background:var(--accent);border-color:var(--accent);color:#fff}
 button:disabled{opacity:.5;cursor:default}
 #app{display:grid;grid-template-columns:270px 1fr;height:100%}
 #side{background:var(--panel);border-inline-end:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
@@ -128,9 +130,10 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
     <div id="composer">
       <div class="row">
         <textarea id="input" rows="1" placeholder="כתוב הודעה… (Enter לשליחה, Shift+Enter לשורה חדשה)"></textarea>
+        <button id="thinkBtn" class="mode" type="button" aria-pressed="false" title="הפעל או כבה מצב חשיבה">Think</button>
         <button id="send" class="primary">שלח</button>
       </div>
-      <div class="hint">הקידומת <code>/think</code> בתחילת הודעה מפעילה מצב חשיבה. השיחה נשמרת כ-Issue בריפו הציבורי.</div>
+      <div class="hint">כפתור Think מפעיל מצב חשיבה להודעה הבאה. השיחה נשמרת כ-Issue בריפו הציבורי.</div>
     </div>
   </section>
 </div>
@@ -193,7 +196,7 @@ const S = {
   issue: null, issues: [], comments: [], pending: [],
   etagC: null, etagI: null, lastKey: '',
   st: { worker: { no: null, state: '', ts: 0, online: false }, executor: { no: null, state: '', ts: 0, online: false }, windows: { no: null, state: '', ts: 0, online: false } },
-  sending: false, branch: null, timer: null,
+  sending: false, thinking: false, branch: null, timer: null,
 };
 const owner = () => (S.repo.split('/')[0] || '');
 const repoPath = p => `/repos/${S.repo}${p}`;
@@ -575,6 +578,7 @@ function autosize() { const t = $('#input'); t.style.height = 'auto'; t.style.he
 async function send() {
   const text = $('#input').value.trim();
   if (!text || S.sending) return;
+  const payload = S.thinking ? '/think\n' + text : text;
   if (!S.token || !S.repo) { openSettings(); return; }
   S.sending = true; $('#send').disabled = true;
   let cleared = false;
@@ -587,7 +591,7 @@ async function send() {
     }
     const tmp = { id: 't' + Date.now(), body: text, user: { login: owner() }, tmp: true };
     S.pending.push(tmp); $('#input').value = ''; cleared = true; autosize(); renderChat(true);
-    const r = await gh('POST', repoPath(`/issues/${S.issue.number}/comments`), { body: text });
+    const r = await gh('POST', repoPath(`/issues/${S.issue.number}/comments`), { body: payload });
     S.pending = S.pending.filter(p => p !== tmp);
     if (r.status !== 201) throw new Error('שליחה נכשלה (' + r.status + ')');
     if (!S.comments.some(c => c.id === r.data.id)) S.comments.push(r.data);   // ייתכן שה-poll כבר הביא אותה
@@ -613,6 +617,12 @@ function closeSettings() { const d = $('#settings'); if (d.close) d.close(); els
 
 function bind() {
   $('#send').addEventListener('click', send);
+  $('#thinkBtn').addEventListener('click', () => {
+    S.thinking = !S.thinking;
+    $('#thinkBtn').classList.toggle('active', S.thinking);
+    $('#thinkBtn').setAttribute('aria-pressed', String(S.thinking));
+    toast(S.thinking ? 'מצב Think פעיל להודעה הבאה' : 'מצב Think כבוי');
+  });
   $('#input').addEventListener('input', autosize);
   $('#input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
