@@ -170,6 +170,7 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
 <script>
 'use strict';
 const MARKER = '<!--llm-reply-->';
+const STREAM_MARKER = '<!--llm-streaming-->';
 const KINDS = {
   worker: { title: '[worker-status]', start: 'start-worker.yml', label: 'מודל' },
   executor: { title: '[executor-status]', start: 'start-workspace.yml', label: 'Linux' },
@@ -343,6 +344,7 @@ function toMessages(list) {
     const login = (c.user && c.user.login) || '';
     let m;
     if (b.startsWith(MARKER)) out.push({ role: 'assistant', id: c.id, ...parseReply(b.slice(MARKER.length)) });
+    else if (b.startsWith(STREAM_MARKER)) out.push({ role: 'assistant', id: c.id, streaming: true, text: b.slice(STREAM_MARKER.length).trim() });
     else if (b.startsWith('<!--tool-result:')) continue;
     else if ((m = b.match(/^<!--tool-call:([0-9a-f]+)-->\s*([\s\S]*)$/))) {
       if (login !== BOT) continue;
@@ -386,13 +388,14 @@ function msgEl(m) {
     const dv = document.createElement('div'); dv.textContent = m.think; dv.dir = 'auto';
     dt.append(sm, dv); d.append(dt);
   }
+  if (m.streaming) { const mt = document.createElement('div'); mt.className = 'meta'; mt.textContent = '● נוצר בזמן אמת'; d.append(mt); }
   if (m.meta) { const mt = document.createElement('div'); mt.className = 'meta'; mt.textContent = m.meta.replace(/\s+/g, ' ').trim(); d.append(mt); }
   return d;
 }
 
 function renderChat(forceScroll) {
   const all = S.comments.concat(S.pending);
-  const key = (S.issue ? S.issue.number : 0) + '|' + all.map(c => c.id + ':' + (c.body || '').length).join(',') + '|' + S.st.worker.online + S.st.executor.online;
+  const key = (S.issue ? S.issue.number : 0) + '|' + all.map(c => c.id + ':' + (c.updated_at || (c.body || '').length)).join(',') + '|' + S.st.worker.online + S.st.executor.online;
   if (key === S.lastKey && !forceScroll) return;
   S.lastKey = key;
   const box = $('#chat');
@@ -658,7 +661,8 @@ function bind() {
 
 function schedule() {
   clearTimeout(S.timer);
-  const waiting = S.pending.length || (S.comments.length && !(S.comments[S.comments.length - 1].body || '').startsWith(MARKER));
+  const streaming = S.comments.some(c => (c.body || '').startsWith(STREAM_MARKER));
+  const waiting = S.pending.length || streaming || (S.comments.length && !(S.comments[S.comments.length - 1].body || '').startsWith(MARKER));
   const fast = S.st.worker.online && waiting;
   const delay = document.hidden ? 30000 : fast ? 3000 : 8000;
   S.timer = setTimeout(async () => { try { await pollComments(); } catch (e) {} schedule(); }, delay);
