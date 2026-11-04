@@ -283,7 +283,8 @@ def chat_complete(llm_url: str, messages, max_tokens: int, thinking: bool, tools
             return d
         piece = d.get("content") or ""
         thought = d.get("reasoning") or ""
-        if not piece and not thought and not total_tokens:
+        segment_tokens = int((d.get("usage") or {}).get("completion_tokens", 0) or 0)
+        if not piece and not thought and not segment_tokens:
             raise RuntimeError("Model returned an empty length-limited segment; stopping automatic continuation.")
         content_parts.append(piece)
         reasoning_parts.append(thought)
