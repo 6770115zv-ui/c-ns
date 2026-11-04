@@ -682,7 +682,6 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
         calls = d["tool_calls"]
         if not calls:
             text = d["content"]
-            if calls:
             return text, d["reasoning"], {"completion_tokens": completion}, d["finish"], steps
         msgs.append({"role": "assistant", "content": d["content"] or "", "tool_calls": calls})
         for tc in calls:
