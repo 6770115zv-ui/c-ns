@@ -266,9 +266,45 @@ def chat_full(llm_url: str, messages, max_tokens: int, thinking: bool, tools=Non
     }
 
 
+def chat_complete(llm_url: str, messages, max_tokens: int, thinking: bool, tools=None,
+                  temperature: float = 0.6, on_delta=None, before_request=None,
+                  max_continuations: int = 32):
+    """Generate in bounded chunks and automatically continue after each output-token boundary."""
+    content_parts, reasoning_parts = [], []
+    total_tokens = 0
+    last = None
+    for continuation in range(max_continuations + 1):
+        if before_request:
+            before_request()
+        d = chat_full(llm_url, messages, max_tokens, thinking, tools, temperature, on_delta)
+        last = d
+        total_tokens += int((d.get("usage") or {}).get("completion_tokens", 0) or 0)
+        if d.get("finish") != "length":
+            d["content"] = "".join(content_parts) + (d.get("content") or "")
+            d["reasoning"] = "".join(reasoning_parts) + (d.get("reasoning") or "")
+            d["usage"] = {"completion_tokens": total_tokens}
+            return d
+        content_parts.append(d.get("content") or "")
+        reasoning_parts.append(d.get("reasoning") or "")
+        if continuation >= max_continuations:
+            break
+        # A cut-off tool call is deliberately not executed. Ask the model to finish
+        # the answer or issue a fresh, complete tool call in the next segment.
+        messages.append({"role": "assistant", "content": d.get("content") or ""})
+        messages.append({"role": "user", "content":
+            "המשך בדיוק מהמקום שבו הפסקת, בלי לחזור על הטקסט שכבר כתבת. "
+            "אם נדרשת פעולה באמצעות כלי, שלח קריאת כלי חדשה ושלמה עם JSON תקין; "
+            "אל תתייחס לקריאת כלי חלקית מהקטע הקודם."})
+    last["content"] = "".join(content_parts)
+    last["reasoning"] = "".join(reasoning_parts)
+    last["usage"] = {"completion_tokens": total_tokens}
+    last["finish"] = "length"
+    return last
+
+
 def chat(llm_url: str, messages, max_tokens: int, thinking: bool,
          temperature: float = 0.6, on_delta=None):
-    d = chat_full(llm_url, messages, max_tokens, thinking, None, temperature, on_delta)
+    d = chat_complete(llm_url, messages, max_tokens, thinking, None, temperature, on_delta)
     return d["content"], d["reasoning"], d["usage"], d["finish"]
 
 
@@ -293,7 +329,7 @@ def run_task(job: dict) -> None:
         out += "\n\n---\n(reasoning)\n" + reasoning
     notes = []
     if finish == "length":
-        notes.append("⚠️ התשובה נחתכה כי הגיעה ל-max_tokens. הגדל את הערך והרץ שוב.")
+        notes.append("⚠️ התשובה הגיעה למספר מקטעי ההמשך המרבי. אפשר לבקש להמשיך.")
     elif any(not f["complete"] for f in files):
         notes.append("⚠️ אחד מבלוקי הקוד לא נסגר, ייתכן שהתשובה חלקית.")
     if files:
@@ -669,7 +705,7 @@ def inspect_compute(job: dict) -> dict:
         f"Model repository: {job.get('model_repo', 'unknown')}",
         f"Model file pattern: {job.get('model_pattern', 'unknown')}",
         f"Context setting: {job.get('ctx', 'default')}",
-        f"Max output tokens: {job.get('max_tokens', 'default')}",
+        f"Output chunk size: {job.get('max_tokens', 6000)} tokens (automatic continuation enabled)",
     ]
     try:
         with open("/proc/meminfo", encoding="ascii", errors="replace") as fh:
@@ -743,7 +779,8 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
         if should_stop:
             should_stop()
         trim_agent_context(msgs, budget)
-        d = chat_full(llm_url, msgs, max_tokens, thinking, available_tools, on_delta=on_delta)
+        d = chat_complete(llm_url, msgs, max_tokens, thinking, available_tools,
+                          on_delta=on_delta, before_request=should_stop)
         if should_stop:
             should_stop()
         completion += int(d["usage"].get("completion_tokens", 0) or 0)
@@ -891,7 +928,7 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
 
     body = MARKER + (text or "(תשובה ריקה)")
     if finish == "length":
-        body += "\n\n> ⚠️ התשובה נחתכה כי הגיעה למגבלת הטוקנים. כתוב \"המשך\" כדי להמשיך."
+        body += "\n\n> ⚠️ נעשה ניסיון להמשיך אוטומטית, אך הגעת למספר מקטעי ההמשך המרבי. אפשר לבקש להמשיך."
     elif finish == "cancelled":
         body += "\n\n> ⏹ נעצר לבקשתך. מוצג כאן החלק שנוצר עד העצירה."
     if reasoning:
