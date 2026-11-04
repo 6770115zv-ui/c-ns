@@ -272,6 +272,21 @@ def test_worker():
     srv.shutdown()
 
 
+def test_stop_marker_history():
+    M = ns["MARKER"]
+    stop = ns["STOP_MARKER"] + "123-->"
+    comments = [
+        {"id": 1, "body": "הודעת משתמש", "user": {"login": OWNER}},
+        {"id": 2, "body": stop, "user": {"login": OWNER}},
+    ]
+    assert ns["needs_reply"](comments, OWNER, set()) is False
+    history = ns["build_messages"](comments, OWNER, "SYS")
+    assert len(history) == 2 and history[-1]["content"] == "הודעת משתמש", history
+    # פקודת עצירה אינה נשמרת כחלק מהשיחה למודל.
+    assert not any("llm-stop" in m.get("content", "") for m in history)
+    print("stop marker history ok")
+
+
 def test_stop_flag():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     base = f"http://127.0.0.1:{srv.server_address[1]}"
