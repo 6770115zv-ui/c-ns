@@ -3,7 +3,10 @@ on:
   workflow_dispatch:
     inputs:
       idle_minutes:
+        description: "Minutes without activity before automatic shutdown"
+        required: false
         default: "45"
+        type: string
 permissions:
   contents: write
   issues: write
@@ -20,23 +23,26 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: python -m pip install -q requests
-      - name: Verify Administrator
+      - name: Verify elevated runner account
         shell: pwsh
         run: |
           $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
           $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw "Not Administrator" }
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw "Windows runner is not running with Administrator privileges."
+          }
+          Write-Host "Administrator token confirmed for $($identity.Name)"
       - name: Run Windows executor
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-          REPO: \${{ github.repository }}
-          OWNER: \${{ github.repository_owner }}
-          IDLE_MINUTES: \${{ inputs.idle_minutes }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          IDLE_MINUTES: ${{ inputs.idle_minutes }}
         run: python scripts/executor_windows.py
       - name: Final sync
         if: always()
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-          REPO: \${{ github.repository }}
-          OWNER: \${{ github.repository_owner }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
         run: python scripts/executor_windows.py --sync-only
