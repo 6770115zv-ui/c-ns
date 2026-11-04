@@ -3,7 +3,7 @@
 מודל שפה (Qwen3.6-35B-A3B) שרץ על GPU חינמי של Kaggle, כשהכול מופעל ומנוהל מ-GitHub:
 - **Run on Kaggle** – משימה אחת, תשובה ב-Summary, קבצי קוד שחולצו עם קישור הורדה.
 - **צ'אט** – דף ב-GitHub Pages. ההודעות נשמרות כתגובות ב-Issues, וworker ב-Kaggle עונה להן.
-- **סביבת עבודה** – runner של GitHub Actions שמריץ בשביל המודל פקודות bash / Python / Java וכו', ושומר את הקבצים בענף `workspace`.
+- **סביבות עבודה** – Linux Workspace עם הרשאות root ו-Windows Workspace עם הרשאות Administrator, כל אחת עם ענף קבצים נפרד.
 
 ## התקנה חד-פעמית
 
@@ -38,10 +38,17 @@ Actions → **Run on Kaggle** → כתוב prompt (והגדל `max_tokens` לד�
 1. בדף לחץ **הפעל סביבה** (או Actions → **Start workspace (executor)**). לוקח כדקה.
 2. כשגם "סביבה מחובר", המודל מקבל שלושה כלים: `bash`, `write_file`, `read_file`, ומריץ אותם בלולאה (עד 15 צעדים להודעה): כותב קבצים, מריץ, רואה שגיאות ומתקן.
 3. כל כלי שהמודל מריץ מופיע בצ'אט ככרטיס (פקודה ופלט), כך שאפשר לעקוב בזמן אמת.
-4. הקבצים נשמרים ב-`/home/sandbox/work` ונדחפים לענף **`workspace`** בריפו כל כ-2 דקות, ובסיום. הכפתור **📁 קבצים** בדף מציג אותם (עם תצוגה מקדימה ל-HTML). בהפעלה הבאה הקבצים משוחזרים מהענף.
+4. הקבצים נשמרים בתיקיית העבודה של ה-runner ונדחפים לענף **`workspace`** בריפו כל כ-2 דקות, ובסיום. הכפתור **📁 Linux** בדף מציג אותם (עם תצוגה מקדימה ל-HTML). בהפעלה הבאה הקבצים משוחזרים מהענף.
 5. נסגר לבד אחרי 45 דקות בלי פעילות, או בכפתור **עצור סביבה**.
 
-הערות: ב-runner של GitHub מותקנים Python 3, Java (JDK 8/11/17/21), Node.js, gcc ו-git, ויש גישה לאינטרנט (pip / npm / maven עובדים). הגבלות: עד 6 שעות להפעלה, 4 ליבות ו-16GB.
+### Windows Workspace (Administrator)
+1. בדף לחץ **הפעל Windows**. זה מפעיל Workflow נפרד על `windows-latest`.
+2. כשהסטטוס **Windows מחובר**, המודל מקבל את הכלים `win_powershell` ו-`win_get_environment`.
+3. פקודות PowerShell רצות בתיקיית העבודה של Windows תחת חשבון runner עם token של Administrator. אפשר להשתמש ב-PowerShell, Python, Git, .NET ובכלים שמותקנים או מתקינים במהלך הריצה.
+4. הקבצים נשמרים בענף **`workspace-windows`** ומסונכרנים כל כשתי דקות ובסיום. כפתור **📁 Windows** מציג ומאפשר להוריד אותם.
+5. לחץ **עצור Windows** או השתמש ב-Actions → **Stop worker / workspaces** → target `windows`. הסביבה נסגרת גם אחרי 45 דקות ללא פעילות או כ-5.5 שעות.
+
+הערות: GitHub-hosted Windows runner הוא זמני. התקנות מערכתיות, שירותים וקבצים מחוץ לתיקיית Workspace לא נשמרים בהרצה הבאה. ה-Workflow נכשל מראש אם לא ניתן לאמת הרשאות Administrator.
 
 
 ## Skills ויכולות
@@ -53,13 +60,14 @@ Actions → **Run on Kaggle** → כתוב prompt (והגדל `max_tokens` לד�
 - **תשתיות וכלים:** devops-ci, shell-automation, git-github, model-operations, kaggle-gpu-operations.
 - **פיתוח אפליקציות:** android-development, android-legacy-compatibility, frontend-web, ux-accessibility, api-development.
 - **ניתוח ומחקר:** web-research, python-data, database-sql, performance-optimization.
-- **Agents ואבטחה:** ai-agent-engineering, linux-security.
+- **Agents ואבטחה:** ai-agent-engineering, linux-security, windows-workspace.
 
 כלי סביבת העבודה הורחבו וכוללים:
 - `bash`, `write_file`, `read_file`.
 - `list_files` למיפוי תיקיות.
 - `search_files` לחיפוש טקסט בקבצים.
-- `get_environment` לקבלת פרטי סביבת ה-GitHub Actions executor — OS, ארכיטקטורה, CPU, RAM, דיסק וגרסאות כלים.
+- `get_environment` לקבלת פרטי סביבת Linux executor.
+- `win_powershell` ו-`win_get_environment` לעבודה ובדיקת סביבת Windows.
 - `inspect_compute` הוא כלי מקומי של ה-Kaggle worker: מדווח על GPU/VRAM, RAM, דיסקים, הגדרות המודל ומצב llama-server, בלי להחזיר credentials.
 - `web_search` מחפש ברשת הציבורית ומחזיר כותרות, קישורים ותקצירים ראשוניים. יש לפתוח ולאמת את המקורות לפני הסתמכות עליהם.
 
@@ -87,7 +95,7 @@ Actions → **Run on Kaggle** → כתוב prompt (והגדל `max_tokens` לד�
 - **הריפו ציבורי: כל השיחות והקוד גלויים לכולם.** אל תכתוב מידע פרטי.
 - ה-worker עונה **רק** להודעות של בעל הריפו. תגובות של אחרים מתעלמים מהן.
 - ה-executor מריץ בקשות **רק** מתגובות של `github-actions[bot]` בתוך Issues שנפתחו על ידי בעל הריפו. תגובה של מישהו אחר עם סמן מזויף לא תרוץ, והמוח מקבל תוצאות רק מה-bot.
-- הפקודות רצות כמשתמש לינוקס נפרד (`sandbox`), בלי גישה לטוקן, לקבצי ה-runner ולשירות המטא-דאטה של הענן. עדיין אין בידוד מלא: פקודה יכולה להשתמש באינטרנט, ולכן אל תבקש מהמודל להריץ קוד שאתה לא סומך עליו, ואל תכניס סודות לסביבה.
+- **הרשאות Workspace מלאות:** Linux Workspace מריץ פקודות כ-`root`; Windows Workspace מריץ PowerShell תחת חשבון ה-runner עם הרשאות `Administrator`. פקודות יורשות את סביבת ה-executor, שעשויה להכיל את `GITHUB_TOKEN` / `GH_TOKEN` וסודות Workflow. לכן קוד שהמודל מריץ יכול לשנות את מערכת ההפעלה הזמנית, לקרוא סודות זמינים ולבצע פעולות GitHub לפי הרשאות הטוקן. זו אינה סביבת בידוד. הפעל אותה רק אם אתה סומך על כל קוד והוראה שהמודל יקבל. אל תדפיס סודות ללוגים, ל-Issues או לענפי Workspace.
 - ה-worker מקבל `GITHUB_TOKEN` של ההרצה שהפעילה אותו: מוגבל לריפו, הרשאת Issues בלבד, ופג בסיום ההרצה. הוא מוטמע במחברת Kaggle **הפרטית**. אל תהפוך אותה לציבורית.
 - בתצוגה המקדימה של HTML בדף, הקוד רץ ב-iframe מבודד (sandbox) בלי גישה לטוקן.
 - מכסת Kaggle: כ-30 שעות GPU בשבוע, עד 12 שעות לסשן. worker פעיל שומר את ה-GPU תפוס גם כשאין הודעות, ולכן יש כיבוי אוטומטי.
