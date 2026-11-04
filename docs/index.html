@@ -598,7 +598,7 @@ async function stopGeneration() {
         !(c.body || '').startsWith(STOP_MARKER)) { request = c; break; }
   }
   if (!request) { toast('לא נמצאה הודעת המקור של המשימה'); return; }
-  S.stopping = true; renderChat();
+  S.stopping = true; renderChat(true);
   try {
     const r = await gh('POST', repoPath('/issues/' + S.issue.number + '/comments'),
                        { body: STOP_MARKER + request.id + '-->' });
@@ -606,7 +606,7 @@ async function stopGeneration() {
     S.comments.push(r.data); S.etagC = null; renderChat();
     toast('בקשת עצירה נשלחה. הסוכן יעצור בהזדמנות הקרובה.');
   } catch (e) { toast(e.message); }
-  finally { S.stopping = false; renderChat(); }
+  finally { S.stopping = false; renderChat(true); }
 }
 
 async function send() {
