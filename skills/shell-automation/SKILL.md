@@ -24,6 +24,6 @@ description: כתיבת Bash ו-PowerShell scripts אוטומטיים, idempoten
 
 ## PowerShell
 - העדף -LiteralPath עבור נתיבים.
-- השתמש ב--ErrorAction Stop כאשר כשל צריך לעצור את הסקריפט.
+- השתמש ב-ErrorAction Stop כאשר כשל צריך לעצור את הסקריפט.
 - בדוק $LASTEXITCODE אחרי תוכניות native.
 - צטט נתיבים עם רווחים.
