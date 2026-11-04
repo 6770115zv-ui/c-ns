@@ -357,14 +357,14 @@ function toolEl(m) {
   const r = m.result, a = m.args || {};
   const icon = !r ? '⏳' : r.ok ? '✓' : '✗';
   let brief = '';
-  if (m.tool === 'bash') brief = String(a.command || '').split('\n')[0].slice(0, 90);
+  if (m.tool === 'bash' || m.tool === 'win_powershell') brief = String(a.command || '').split('\n')[0].slice(0, 90);
   else brief = String(a.path || '');
   const sum = document.createElement('summary'); sum.textContent = `${icon} ${m.tool}: ${brief}`; det.append(sum);
   const add = (label, text) => {
     const l = document.createElement('div'); l.className = 'lbl'; l.textContent = label;
     const p = document.createElement('pre'); p.textContent = text; det.append(l, p);
   };
-  if (m.tool === 'bash') add('פקודה', a.command || '');
+  if (m.tool === 'bash' || m.tool === 'win_powershell') add(m.tool === 'win_powershell' ? 'PowerShell' : 'פקודה', a.command || '');
   else if (m.tool === 'write_file') add('תוכן הקובץ', a.content || '');
   if (r) add(m.tool === 'bash' ? `פלט (exit ${r.exit}${r.ms ? ', ' + r.ms + 'ms' : ''})` : 'תוצאה', r.output || '');
   d.append(det);
