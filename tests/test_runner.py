@@ -61,6 +61,37 @@ def test_history():
     print("history ok")
 
 
+def test_auto_token_continuation():
+    original = ns["chat_full"]
+    scripted = [
+        {"content": "חלק ראשון ", "reasoning": "", "usage": {"completion_tokens": 4},
+         "finish": "length", "tool_calls": []},
+        {"content": "חלק שני ", "reasoning": "", "usage": {"completion_tokens": 5},
+         "finish": "length", "tool_calls": []},
+        {"content": "סיום", "reasoning": "", "usage": {"completion_tokens": 2},
+         "finish": "stop", "tool_calls": []},
+    ]
+    seen = []
+    def fake_chat_full(*args, **kwargs):
+        seen.append(len(args[1]))
+        return scripted.pop(0)
+    ns["chat_full"] = fake_chat_full
+    try:
+        messages = [{"role": "user", "content": "כתוב תשובה ארוכה"}]
+        checks = []
+        result = ns["chat_complete"](
+            "http://unused", messages, 10, False,
+            before_request=lambda: checks.append(True))
+        assert result["content"] == "חלק ראשון חלק שני סיום", result
+        assert result["usage"]["completion_tokens"] == 11, result
+        assert result["finish"] == "stop", result
+        assert len(seen) == 3 and len(checks) == 3, (seen, checks)
+        assert len(messages) == 5, messages
+    finally:
+        ns["chat_full"] = original
+    print("automatic token continuation ok")
+
+
 # ---------------------------------------------------------------- GitHub מדומה
 class State:
     def __init__(self):
@@ -486,6 +517,7 @@ def test_executor_unit():
 if __name__ == "__main__":
     test_extract()
     test_history()
+    test_auto_token_continuation()
     test_worker()
     test_stop_marker_history()
     test_stop_flag()
