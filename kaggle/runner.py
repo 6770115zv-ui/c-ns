@@ -669,7 +669,6 @@ def read_skill_pack(job: dict, name: str) -> dict:
 
 def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinking: bool,
                available_tools=None):
-    max_steps = max(1, min(int(job.get("max_steps", 15)), 30))
     max_tokens = int(job.get("max_tokens", 6000))
     budget = context_budget(job)
     available_tools = available_tools if available_tools is not None else TOOLS
@@ -681,10 +680,9 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
         d = chat_full(llm_url, msgs, max_tokens, thinking, available_tools)
         completion += int(d["usage"].get("completion_tokens", 0) or 0)
         calls = d["tool_calls"]
-        if not calls or steps >= max_steps:
+        if not calls:
             text = d["content"]
             if calls:
-                text = (text + "\n\n" if text else "") + '⚠️ הגעתי למגבלת הצעדים. כתוב "המשך" כדי להמשיך.'
             return text, d["reasoning"], {"completion_tokens": completion}, d["finish"], steps
         msgs.append({"role": "assistant", "content": d["content"] or "", "tool_calls": calls})
         for tc in calls:
