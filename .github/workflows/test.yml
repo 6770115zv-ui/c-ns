@@ -33,7 +33,7 @@ jobs:
 
       - name: Check Python syntax
         run: |
-          python -m py_compile kaggle/runner.py kaggle/security_research.py scripts/executor.py scripts/push_to_kaggle.py scripts/push_security_research.py scripts/wait_kaggle.py
+          python -m py_compile kaggle/runner.py kaggle/security_research.py scripts/executor.py scripts/executor_windows.py scripts/push_to_kaggle.py scripts/push_security_research.py scripts/wait_kaggle.py
 
       - name: Run agent tests
         run: python tests/test_runner.py
