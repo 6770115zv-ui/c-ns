@@ -133,7 +133,7 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
         <button id="thinkBtn" class="mode" type="button" aria-pressed="false" title="הפעל או כבה מצב חשיבה">Think</button>
         <button id="send" class="primary">שלח</button>
       </div>
-      <div class="hint">כפתור Think מפעיל מצב חשיבה להודעה הבאה. השיחה נשמרת כ-Issue בריפו הציבורי.</div>
+      <div class="hint">כפתור Think מפעיל או מכבה מצב חשיבה. הבחירה נשמרת גם לאחר רענון הדף.</div>
     </div>
   </section>
 </div>
@@ -196,7 +196,7 @@ const S = {
   issue: null, issues: [], comments: [], pending: [],
   etagC: null, etagI: null, lastKey: '',
   st: { worker: { no: null, state: '', ts: 0, online: false }, executor: { no: null, state: '', ts: 0, online: false }, windows: { no: null, state: '', ts: 0, online: false } },
-  sending: false, thinking: false, branch: null, timer: null,
+  sending: false, thinking: store.get('thinking', '0') === '1', branch: null, timer: null,
 };
 const owner = () => (S.repo.split('/')[0] || '');
 const repoPath = p => `/repos/${S.repo}${p}`;
@@ -616,9 +616,12 @@ function openSettings() {
 function closeSettings() { const d = $('#settings'); if (d.close) d.close(); else d.removeAttribute('open'); }
 
 function bind() {
+  $('#thinkBtn').classList.toggle('active', S.thinking);
+  $('#thinkBtn').setAttribute('aria-pressed', String(S.thinking));
   $('#send').addEventListener('click', send);
   $('#thinkBtn').addEventListener('click', () => {
     S.thinking = !S.thinking;
+    store.set('thinking', S.thinking ? '1' : '0');
     $('#thinkBtn').classList.toggle('active', S.thinking);
     $('#thinkBtn').setAttribute('aria-pressed', String(S.thinking));
     toast(S.thinking ? 'מצב Think פעיל להודעה הבאה' : 'מצב Think כבוי');
