@@ -901,7 +901,7 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         last_size[0] = len(current)
         try:
             status, result, _ = gh.call("PATCH", f"/issues/comments/{stream_id}",
-                                        {"body": STREAM_MARKER + current[-58000:]})
+                                        {"body": STREAM_MARKER + current[:58000]})
             if status != 200:
                 print(f"[stream] update failed HTTP {status}: {result}", flush=True)
         except Exception as e:  # noqa: BLE001
@@ -939,11 +939,21 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         body += f"\n\n<details><summary>חשיבה</summary>\n\n{reasoning[:8000]}\n</details>"
     extra = f" · 🛠 {steps} כלים" if steps else ""
     body += f"\n\n<sub>⏱ {dt:.1f}s · {usage.get('completion_tokens', '?')} tokens{extra}</sub>"
-    body = body[:60000]
+    # GitHub limits each issue comment size. Preserve the complete answer by
+    # placing overflow in additional assistant comments instead of slicing it off.
+    chunks = [body[:60000]]
+    remaining = body[60000:]
+    while remaining:
+        chunks.append(MARKER + remaining[:58000])
+        remaining = remaining[58000:]
 
-    st, data, _ = gh.call("PATCH", f"/issues/comments/{stream_id}", {"body": body})
+    st, data, _ = gh.call("PATCH", f"/issues/comments/{stream_id}", {"body": chunks[0]})
     if st != 200:
         raise RuntimeError(f"finalize streaming comment HTTP {st}: {data}")
+    for index, chunk in enumerate(chunks[1:], 2):
+        st, data, _ = gh.call("POST", f"/issues/{number}/comments", {"body": chunk})
+        if st != 201:
+            raise RuntimeError(f"publish answer continuation #{index} HTTP {st}: {data}")
 
 
 def find_status_issue(gh: GH, title: str = STATUS_TITLE):
