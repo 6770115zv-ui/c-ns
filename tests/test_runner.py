@@ -110,6 +110,27 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(n)) if n else {}
 
+    def _send_sse(self, message):
+        delta = {}
+        if message.get("content"):
+            delta["content"] = message["content"]
+        if message.get("reasoning_content"):
+            delta["reasoning_content"] = message["reasoning_content"]
+        if message.get("tool_calls"):
+            delta["tool_calls"] = [
+                {"index": i, "id": tc.get("id"), "type": tc.get("type", "function"),
+                 "function": tc.get("function", {})}
+                for i, tc in enumerate(message["tool_calls"])
+            ]
+        event = {"choices": [{"delta": delta, "finish_reason": "tool_calls" if message.get("tool_calls") else "stop"}],
+                 "usage": {"completion_tokens": 7}}
+        raw = ("data: " + json.dumps(event) + "\n\n" + "data: [DONE]\n\n").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_POST(self):
         self.route("POST")
 
@@ -144,8 +165,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "name": "bash", "arguments": json.dumps({"command": "python3 hello.py"})}}]}
                     elif last["role"] == "tool":
                         msg = {"content": "DONE: " + last["content"], "reasoning_content": ""}
-                return self._send(200, {"choices": [{"message": msg, "finish_reason": "stop"}],
-                                        "usage": {"completion_tokens": 7}})
+                return self._send_sse(msg)
             if p == "/issues" and method == "GET":
                 items = [i for i in ST.issues.values() if i["state"] == q.get("state", "open")]
                 if "labels" in q:
@@ -177,6 +197,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, ST.comments[n][(page - 1) * per: page * per])
                 c = ST.add_comment(n, "github-actions[bot]", self._body()["body"])
                 return self._send(201, c)
+            m = re.fullmatch(r"/issues/comments/(\d+)", p)
+            if m and method == "PATCH":
+                cid = int(m.group(1))
+                for issue_no, comments in ST.comments.items():
+                    for comment in comments:
+                        if comment["id"] == cid:
+                            comment["body"] = self._body()["body"]
+                            comment["updated_at"] = f"2026-01-01T00:02:{cid % 60:02d}Z"
+                            ST.issues[issue_no]["_rev"] += 1
+                            return self._send(200, comment)
+                return self._send(404, {"message": "comment not found"})
             m = re.fullmatch(r"/issues/comments/(\d+)/reactions", p)
             if m:
                 ST.reactions.append((int(m.group(1)), self._body()["content"]))
