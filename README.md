@@ -22,7 +22,7 @@
 ## שימוש
 
 ### משימה בודדת
-Actions → **Run on Kaggle** → כתוב prompt (והגדל `max_tokens` לדף HTML מלא, 8000 ומעלה).
+Actions → **Run on Kaggle** → כתוב prompt. `max_tokens` הוא גודל מקטע יצירה, לא מגבלת אורך כוללת: ה-worker ממשיך אוטומטית כל עוד המודל מחזיר `finish_reason=length`.
 בסוף ב-Summary: התשובה, וקישור **הורדת קבצי הקוד** (הקישור דורש התחברות ל-GitHub).
 
 ### צ'אט
@@ -114,4 +114,4 @@ npm i jsdom && node tests/ui_smoke.js   # דף הצ'אט (רינדור, XSS, ש�
 - ההפעלה מהדף נכשלת: חסרה הרשאת *Actions: Read and write* בטוקן.
 - ב-GPU אחד בלבד: נסה `NvidiaTeslaT4Highmem` בשדה accelerator.
 - "ה-executor לא ענה בזמן": הסביבה כבויה או שהפקודה ארוכה מדי. בדוק את הלשונית Actions.
-- שגיאת הקשר (context) מהמודל: הקטן `max_tokens` או הגדל `ctx` ל-32768 ב-**Start chat worker** (ייתכן שלא ייכנס בזיכרון, ואז ראה את `server.log` בפלט).
+- שגיאת הקשר (context) מהמודל: `max_tokens` קובע את גודל כל מקטע יצירה בלבד; ההמשך אוטומטי ואינו מוגבל בסך הטוקנים. אם בקשת ההמשך גורמת לחריגת context, הקטן את גודל המקטע או הגדל `ctx` ל-32768 ב-**Start chat worker** (ייתכן שלא ייכנס בזיכרון, ואז ראה את `server.log` בפלט).
