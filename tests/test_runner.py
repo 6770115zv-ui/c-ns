@@ -487,6 +487,7 @@ if __name__ == "__main__":
     test_extract()
     test_history()
     test_worker()
+    test_stop_marker_history()
     test_stop_flag()
     test_executor_unit()
     test_skill_bundle()
