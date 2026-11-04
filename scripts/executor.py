@@ -6,8 +6,9 @@
 
 אבטחה:
   * מקבל פקודות רק מתגובות של github-actions[bot] בתוך Issues שנפתחו על ידי בעל הריפו.
-  * כל הפקודות רצות כמשתמש לינוקס נפרד ("sandbox") בלי גישה לטוקן ולקבצי ה-runner.
-  * הטוקן נמצא רק בתהליך הזה (משתני סביבה של משתמש ה-runner) וב-git בזמן סנכרון.
+  * כל פקודות ה-Workspace רצות כ-root דרך sudo.
+  * סביבת התהליך מועברת לפקודות, ולכן משתני הסביבה הזמינים ל-executor (כולל GH_TOKEN) נגישים גם לפקודות ה-Workspace.
+  * יש להתייחס לכל בקשת Workspace כקוד בעל הרשאות מלאות על ה-runner.
   * הקבצים מסונכרנים לענף workspace בריפו.
 
 הרצה:  python scripts/executor.py              (לולאה ראשית)
@@ -53,7 +54,7 @@ def paths():
 
 
 P = paths()
-SUDO = [] if LOCAL else ["sudo", "-n", "-u", SANDBOX, "-H"]
+SUDO = [] if LOCAL else ["sudo", "-n"]
 
 
 def log(*a):
@@ -315,7 +316,9 @@ def run_bash(cid, command, timeout):
              f"timeout -k 5 {int(timeout)} bash {shlex.quote(script)} > {shlex.quote(out)} 2>&1")
     t0 = time.time()
     try:
-        r = subprocess.run(SUDO + ["env", "-i"] + tool_env() + ["bash", "-c", inner],
+        # Run as root and preserve the executor environment (including GH_TOKEN).
+        # This intentionally gives Workspace commands full runner-level privileges.
+        r = subprocess.run(SUDO + (["-E"] if not LOCAL else []) + ["bash", "-c", inner],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                            text=True, timeout=timeout + 20)
         code = r.returncode
