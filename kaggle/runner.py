@@ -804,11 +804,35 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
     if st != 201:
         raise RuntimeError(f"cannot create streaming comment HTTP {st}: {stream_data}")
     stream_id = stream_data["id"]
+    request_id = str(last["id"])
+    cancel_marker = f"{STOP_MARKER}{request_id}-->"
+    cancel_state = {"checked": 0.0, "stopped": False}
+
+    def check_cancel(force=False):
+        if cancel_state["stopped"]:
+            raise GenerationStopped("stopped by user")
+        now = time.monotonic()
+        if not force and now - cancel_state["checked"] < 1.0:
+            return
+        cancel_state["checked"] = now
+        try:
+            status, items, _ = gh.call("GET", f"/issues/{number}/comments",
+                                       params={"since": last.get("created_at", ""), "per_page": 100})
+            if status == 200 and any((c.get("body") or "").strip() == cancel_marker
+                                     and is_owner(c, owner) for c in (items or [])):
+                cancel_state["stopped"] = True
+                raise GenerationStopped("stopped by user")
+        except GenerationStopped:
+            raise
+        except Exception as e:  # noqa: BLE001
+            print("[stop] poll failed:", type(e).__name__, e, flush=True)
+
     stream_text = []
     last_publish = [0.0]
     last_size = [0]
 
     def publish_stream(piece="", thought=""):
+        check_cancel()
         if piece:
             stream_text.append(piece)
         current = "".join(stream_text)
@@ -831,11 +855,15 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
     try:
         if use_tools:
             text, reasoning, usage, finish, steps = agent_loop(
-                gh, number, msgs, llm_url, job, thinking, active_tools, publish_stream)
+                gh, number, msgs, llm_url, job, thinking, active_tools, publish_stream, check_cancel)
         else:
             text, reasoning, usage, finish = chat(
                 llm_url, msgs, int(job.get("max_tokens", 6000)), thinking,
                 on_delta=publish_stream)
+        check_cancel(force=True)
+    except GenerationStopped:
+        text = "".join(stream_text)
+        finish = "cancelled"
     except Exception as e:  # noqa: BLE001
         text = f"⚠️ שגיאה בהפעלת המודל: {e}"
         finish = "error"
@@ -844,6 +872,8 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
     body = MARKER + (text or "(תשובה ריקה)")
     if finish == "length":
         body += "\n\n> ⚠️ התשובה נחתכה כי הגיעה למגבלת הטוקנים. כתוב \"המשך\" כדי להמשיך."
+    elif finish == "cancelled":
+        body += "\n\n> ⏹ נעצר לבקשתך. מוצג כאן החלק שנוצר עד העצירה."
     if reasoning:
         body += f"\n\n<details><summary>חשיבה</summary>\n\n{reasoning[:8000]}\n</details>"
     extra = f" · 🛠 {steps} כלים" if steps else ""
