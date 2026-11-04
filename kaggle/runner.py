@@ -267,39 +267,33 @@ def chat_full(llm_url: str, messages, max_tokens: int, thinking: bool, tools=Non
 
 
 def chat_complete(llm_url: str, messages, max_tokens: int, thinking: bool, tools=None,
-                  temperature: float = 0.6, on_delta=None, before_request=None,
-                  max_continuations: int = 32):
+                  temperature: float = 0.6, on_delta=None, before_request=None):
     """Generate in bounded chunks and automatically continue after each output-token boundary."""
     content_parts, reasoning_parts = [], []
     total_tokens = 0
-    last = None
-    for continuation in range(max_continuations + 1):
+    while True:
         if before_request:
             before_request()
         d = chat_full(llm_url, messages, max_tokens, thinking, tools, temperature, on_delta)
-        last = d
         total_tokens += int((d.get("usage") or {}).get("completion_tokens", 0) or 0)
         if d.get("finish") != "length":
             d["content"] = "".join(content_parts) + (d.get("content") or "")
             d["reasoning"] = "".join(reasoning_parts) + (d.get("reasoning") or "")
             d["usage"] = {"completion_tokens": total_tokens}
             return d
-        content_parts.append(d.get("content") or "")
-        reasoning_parts.append(d.get("reasoning") or "")
-        if continuation >= max_continuations:
-            break
+        piece = d.get("content") or ""
+        thought = d.get("reasoning") or ""
+        if not piece and not thought and not total_tokens:
+            raise RuntimeError("Model returned an empty length-limited segment; stopping automatic continuation.")
+        content_parts.append(piece)
+        reasoning_parts.append(thought)
         # A cut-off tool call is deliberately not executed. Ask the model to finish
         # the answer or issue a fresh, complete tool call in the next segment.
-        messages.append({"role": "assistant", "content": d.get("content") or ""})
+        messages.append({"role": "assistant", "content": piece})
         messages.append({"role": "user", "content":
             "המשך בדיוק מהמקום שבו הפסקת, בלי לחזור על הטקסט שכבר כתבת. "
             "אם נדרשת פעולה באמצעות כלי, שלח קריאת כלי חדשה ושלמה עם JSON תקין; "
             "אל תתייחס לקריאת כלי חלקית מהקטע הקודם."})
-    last["content"] = "".join(content_parts)
-    last["reasoning"] = "".join(reasoning_parts)
-    last["usage"] = {"completion_tokens": total_tokens}
-    last["finish"] = "length"
-    return last
 
 
 def chat(llm_url: str, messages, max_tokens: int, thinking: bool,
@@ -779,8 +773,13 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
         if should_stop:
             should_stop()
         trim_agent_context(msgs, budget)
+        def prepare_request():
+            if should_stop:
+                should_stop()
+            trim_agent_context(msgs, budget)
+
         d = chat_complete(llm_url, msgs, max_tokens, thinking, available_tools,
-                          on_delta=on_delta, before_request=should_stop)
+                          on_delta=on_delta, before_request=prepare_request)
         if should_stop:
             should_stop()
         completion += int(d["usage"].get("completion_tokens", 0) or 0)
@@ -914,9 +913,13 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
             text, reasoning, usage, finish, steps = agent_loop(
                 gh, number, msgs, llm_url, job, thinking, active_tools, publish_stream, check_cancel)
         else:
-            text, reasoning, usage, finish = chat(
-                llm_url, msgs, int(job.get("max_tokens", 6000)), thinking,
-                on_delta=publish_stream)
+            def prepare_request():
+                check_cancel()
+                trim_agent_context(msgs, context_budget(job))
+
+            d = chat_complete(llm_url, msgs, int(job.get("max_tokens", 6000)), thinking,
+                              on_delta=publish_stream, before_request=prepare_request)
+            text, reasoning, usage, finish = d["content"], d["reasoning"], d["usage"], d["finish"]
         check_cancel(force=True)
     except GenerationStopped:
         text = "".join(stream_text)
