@@ -82,8 +82,8 @@ def run_ps(command,timeout):
     except subprocess.TimeoutExpired as e:
         code=124; out=(e.stdout or "")+(e.stderr or "")
         if isinstance(out,bytes): out=out.decode("utf-8","replace")
-        out+="\\n[PowerShell timed out after "+str(timeout)+" seconds]"
-    if len(out)>20000: out=out[:10000]+"\\n...[truncated]...\\n"+out[-10000:]
+        out+="\n[PowerShell timed out after "+str(timeout)+" seconds]"
+    if len(out)>20000: out=out[:10000]+"\n...[truncated]...\n"+out[-10000:]
     return {"ok":code==0,"exit":code,"output":out,"ms":int((time.time()-started)*1000)}
 
 def execute(payload):
