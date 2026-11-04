@@ -496,6 +496,9 @@ def classify(comments, done, owner_ok):
             payload = json.loads(m.group(2))
         except ValueError:
             payload = {"tool": "invalid"}
+        # Windows requests are handled only by executor_windows.py.
+        if str(payload.get("tool", "")).startswith("win_"):
+            continue
         pending.append((cid, payload, c))
     return pending
 
