@@ -23,6 +23,8 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.primary:hover{background:var(--accent2)}
 button.mode{white-space:nowrap}
 button.mode.active{background:var(--accent);border-color:var(--accent);color:#fff}
+button.stop{background:#7b2830;border-color:#a83b46;color:#fff}
+button.stop[hidden]{display:none}
 button:disabled{opacity:.5;cursor:default}
 #app{display:grid;grid-template-columns:270px 1fr;height:100%}
 #side{background:var(--panel);border-inline-end:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
@@ -132,6 +134,7 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
         <textarea id="input" rows="1" placeholder="כתוב הודעה… (Enter לשליחה, Shift+Enter לשורה חדשה)"></textarea>
         <button id="thinkBtn" class="mode" type="button" aria-pressed="false" title="הפעל או כבה מצב חשיבה">Think</button>
         <button id="send" class="primary">שלח</button>
+        <button id="stop" class="stop" type="button" hidden>עצור</button>
       </div>
       <div class="hint">כפתור Think מפעיל או מכבה מצב חשיבה. הבחירה נשמרת גם לאחר רענון הדף.</div>
     </div>
@@ -171,6 +174,7 @@ dialog .btns{display:flex;gap:8px;justify-content:flex-start;margin-top:14px}
 'use strict';
 const MARKER = '<!--llm-reply-->';
 const STREAM_MARKER = '<!--llm-streaming-->';
+const STOP_MARKER = '<!--llm-stop:';
 const KINDS = {
   worker: { title: '[worker-status]', start: 'start-worker.yml', label: 'מודל' },
   executor: { title: '[executor-status]', start: 'start-workspace.yml', label: 'Linux' },
@@ -197,7 +201,7 @@ const S = {
   issue: null, issues: [], comments: [], pending: [],
   etagC: null, etagI: null, lastKey: '',
   st: { worker: { no: null, state: '', ts: 0, online: false }, executor: { no: null, state: '', ts: 0, online: false }, windows: { no: null, state: '', ts: 0, online: false } },
-  sending: false, thinking: store.get('thinking', '0') === '1', branch: null, timer: null,
+  sending: false, stopping: false, thinking: store.get('thinking', '0') === '1', branch: null, timer: null,
 };
 const owner = () => (S.repo.split('/')[0] || '');
 const repoPath = p => `/repos/${S.repo}${p}`;
@@ -343,6 +347,7 @@ function toMessages(list) {
     const b = c.body || '';
     const login = (c.user && c.user.login) || '';
     let m;
+    if (b.startsWith(STOP_MARKER)) continue;
     if (b.startsWith(MARKER)) out.push({ role: 'assistant', id: c.id, ...parseReply(b.slice(MARKER.length)) });
     else if (b.startsWith(STREAM_MARKER)) out.push({ role: 'assistant', id: c.id, streaming: true, text: b.slice(STREAM_MARKER.length).trim() });
     else if (b.startsWith('<!--tool-result:')) continue;
@@ -408,6 +413,10 @@ function renderChat(forceScroll) {
     wrap.append(e);
   }
   msgs.forEach(m => wrap.append(msgEl(m)));
+  const streaming = S.comments.some(c => (c.body || '').startsWith(STREAM_MARKER));
+  $('#stop').hidden = !streaming;
+  $('#stop').disabled = !!S.stopping;
+  $('#stop').textContent = S.stopping ? 'שולח עצירה…' : 'עצור';
   const lastM = msgs[msgs.length - 1];
   if (lastM && (lastM.role === 'user' || lastM.role === 'tool')) {
     const t = document.createElement('div'); t.className = 'typing';
@@ -578,6 +587,28 @@ async function showFile(f) {
 /* ---------------------------------------------------------------- Sending */
 function autosize() { const t = $('#input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 200) + 'px'; }
 
+async function stopGeneration() {
+  if (!S.issue || S.stopping) return;
+  const streamIndex = S.comments.findIndex(c => (c.body || '').startsWith(STREAM_MARKER));
+  if (streamIndex < 0) return;
+  let request = null;
+  for (let i = streamIndex - 1; i >= 0; i--) {
+    const c = S.comments[i];
+    if (((c.user && c.user.login) || '').toLowerCase() === owner().toLowerCase() &&
+        !(c.body || '').startsWith(STOP_MARKER)) { request = c; break; }
+  }
+  if (!request) { toast('לא נמצאה הודעת המקור של המשימה'); return; }
+  S.stopping = true; renderChat();
+  try {
+    const r = await gh('POST', repoPath('/issues/' + S.issue.number + '/comments'),
+                       { body: STOP_MARKER + request.id + '-->' });
+    if (r.status !== 201) throw new Error('שליחת בקשת העצירה נכשלה (' + r.status + ')');
+    S.comments.push(r.data); S.etagC = null; renderChat();
+    toast('בקשת עצירה נשלחה. הסוכן יעצור בהזדמנות הקרובה.');
+  } catch (e) { toast(e.message); }
+  finally { S.stopping = false; renderChat(); }
+}
+
 async function send() {
   const text = $('#input').value.trim();
   if (!text || S.sending) return;
@@ -622,6 +653,7 @@ function bind() {
   $('#thinkBtn').classList.toggle('active', S.thinking);
   $('#thinkBtn').setAttribute('aria-pressed', String(S.thinking));
   $('#send').addEventListener('click', send);
+  $('#stop').addEventListener('click', stopGeneration);
   $('#thinkBtn').addEventListener('click', () => {
     S.thinking = !S.thinking;
     store.set('thinking', S.thinking ? '1' : '0');
