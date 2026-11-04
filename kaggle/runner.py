@@ -25,6 +25,7 @@ LLM_URL = "http://127.0.0.1:8080"
 
 MARKER = "<!--llm-reply-->"
 STREAM_MARKER = "<!--llm-streaming-->"
+STOP_MARKER = "<!--llm-stop:"
 STATUS_TITLE = "[worker-status]"
 EXECUTOR_TITLE = "[executor-status]"
 WINDOWS_EXECUTOR_TITLE = "[windows-executor-status]"
@@ -355,7 +356,10 @@ def needs_reply(comments, owner: str, handled) -> bool:
     if not comments:
         return False
     last = comments[-1]
-    return (not (last.get("body") or "").startswith(MARKER)) and is_owner(last, owner) and last["id"] not in handled
+    body = last.get("body") or ""
+    if body.startswith(STOP_MARKER):
+        return False
+    return (not body.startswith((MARKER, STREAM_MARKER))) and is_owner(last, owner) and last["id"] not in handled
 
 
 def clean_reply(body: str) -> str:
@@ -369,6 +373,8 @@ def build_messages(comments, owner: str, system: str, max_chars: int = 36000):
     msgs = []
     for c in comments:
         body = c.get("body") or ""
+        if body.startswith(STOP_MARKER):
+            continue
         if body.startswith(MARKER):
             role, content = "assistant", clean_reply(body)
         elif is_owner(c, owner):
@@ -519,7 +525,11 @@ def executor_online(gh: GH, cache: dict, title: str = EXECUTOR_TITLE) -> bool:
     return online
 
 
-def call_tool(gh: GH, number: int, name: str, args: dict, poll: float = 2.0) -> dict:
+class GenerationStopped(Exception):
+    """Raised when the user stops the active response."""
+
+
+def call_tool(gh: GH, number: int, name: str, args: dict, poll: float = 2.0, should_stop=None) -> dict:
     """שולח בקשת כלי כתגובה ב-Issue וממתין לתוצאה מה-executor."""
     cid = uuid.uuid4().hex[:8]
     body = f"<!--tool-call:{cid}-->\n" + json.dumps({"tool": name, "args": args}, ensure_ascii=False)
@@ -538,7 +548,11 @@ def call_tool(gh: GH, number: int, name: str, args: dict, poll: float = 2.0) -> 
     marker = f"<!--tool-result:{cid}-->"
     etag = None
     while time.time() < deadline:
+        if should_stop:
+            should_stop()
         time.sleep(poll)
+        if should_stop:
+            should_stop()
         try:
             st, items, new_etag = gh.call("GET", f"/issues/{number}/comments", etag=etag,
                                           params={"since": since, "per_page": 100})
@@ -718,7 +732,7 @@ def read_skill_pack(job: dict, name: str) -> dict:
 
 
 def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinking: bool,
-               available_tools=None, on_delta=None):
+               available_tools=None, on_delta=None, should_stop=None):
     max_tokens = int(job.get("max_tokens", 6000))
     budget = context_budget(job)
     available_tools = available_tools if available_tools is not None else TOOLS
@@ -726,8 +740,12 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
     allowed = {x["function"]["name"] for x in available_tools}
     steps, completion = 0, 0
     while True:
+        if should_stop:
+            should_stop()
         trim_agent_context(msgs, budget)
         d = chat_full(llm_url, msgs, max_tokens, thinking, available_tools, on_delta=on_delta)
+        if should_stop:
+            should_stop()
         completion += int(d["usage"].get("completion_tokens", 0) or 0)
         calls = d["tool_calls"]
         if not calls:
@@ -735,6 +753,8 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
             return text, d["reasoning"], {"completion_tokens": completion}, d["finish"], steps
         msgs.append({"role": "assistant", "content": d["content"] or "", "tool_calls": calls})
         for tc in calls:
+            if should_stop:
+                should_stop()
             fn = tc.get("function") or {}
             name = fn.get("name", "")
             args = fn.get("arguments") or {}
@@ -759,7 +779,7 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
             elif name in local_tools:
                 res = {"ok": False, "exit": 1, "output": "Unknown local skill tool"}
             else:
-                res = call_tool(gh, number, name, args)
+                res = call_tool(gh, number, name, args, should_stop=should_stop)
             msgs.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": model_view(res, name)})
             steps += 1
 
