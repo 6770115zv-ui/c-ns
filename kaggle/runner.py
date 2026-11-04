@@ -815,13 +815,16 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         now = time.monotonic()
         if not current or (now - last_publish[0] < 2.0 and len(current) - last_size[0] < 100):
             return
-        status, result, _ = gh.call("PATCH", f"/issues/comments/{stream_id}",
-                                    {"body": STREAM_MARKER + current[-58000:]})
-        if status != 200:
-            print(f"[stream] update failed HTTP {status}: {result}", flush=True)
-        else:
-            last_publish[0] = now
-            last_size[0] = len(current)
+        # גם אם עדכון GitHub נכשל, לא עוצרים את יצירת התשובה ולא מציפים בקשות חוזרות.
+        last_publish[0] = now
+        last_size[0] = len(current)
+        try:
+            status, result, _ = gh.call("PATCH", f"/issues/comments/{stream_id}",
+                                        {"body": STREAM_MARKER + current[-58000:]})
+            if status != 200:
+                print(f"[stream] update failed HTTP {status}: {result}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[stream] update failed: {type(e).__name__}: {e}", flush=True)
 
     t0 = time.time()
     reasoning, usage, finish, steps, text = "", {}, None, 0, ""
