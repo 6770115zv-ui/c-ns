@@ -71,11 +71,20 @@ def heartbeat(n,state):
     api("PATCH","/issues/"+str(n),{"body":json.dumps({"state":state,"ts":int(time.time()),"os":"windows"})})
 
 def run_ps(command,timeout):
-    timeout=max(1,min(int(timeout or 120),600))
-    p=subprocess.run(["powershell.exe","-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-Command",command],cwd=str(WORK),env=os.environ.copy(),capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=timeout)
-    out=(p.stdout or "")+(p.stderr or "")
-    if len(out)>20000: out=out[:10000]+"\n...[truncated]...\n"+out[-10000:]
-    return {"ok":p.returncode==0,"exit":p.returncode,"output":out,"ms":0}
+    if not isinstance(command,str) or not command.strip():
+        return {"ok":False,"exit":1,"output":"Missing PowerShell command."}
+    try: timeout=max(1,min(int(timeout or 120),600))
+    except (TypeError,ValueError): timeout=120
+    started=time.time()
+    try:
+        p=subprocess.run(["powershell.exe","-NoLogo","-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-Command",command],cwd=str(WORK),env=os.environ.copy(),capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=timeout)
+        code=p.returncode; out=(p.stdout or "")+(p.stderr or "")
+    except subprocess.TimeoutExpired as e:
+        code=124; out=(e.stdout or "")+(e.stderr or "")
+        if isinstance(out,bytes): out=out.decode("utf-8","replace")
+        out+="\\n[PowerShell timed out after "+str(timeout)+" seconds]"
+    if len(out)>20000: out=out[:10000]+"\\n...[truncated]...\\n"+out[-10000:]
+    return {"ok":code==0,"exit":code,"output":out,"ms":int((time.time()-started)*1000)}
 
 def execute(payload):
     tool=payload.get("tool"); args=payload.get("args") or {}
@@ -109,8 +118,14 @@ def main():
                 if "pull_request" in issue or (issue.get("user") or {}).get("login","").lower()!=OWNER: continue
                 no=issue["number"]
                 if seen.get(no)==issue.get("updated_at"): continue
-                _,comments=api("GET","/issues/"+str(no)+"/comments",params={"per_page":100})
-                for c in comments or []:
+                comments=[]; page=1
+                while True:
+                    cs,chunk=api("GET","/issues/"+str(no)+"/comments",params={"per_page":100,"page":page})
+                    if cs!=200: break
+                    comments.extend(chunk or [])
+                    if not chunk or len(chunk)<100: break
+                    page+=1
+                for c in comments:
                     if (c.get("user") or {}).get("login")!=BOT: continue
                     m=re.match(r"^<!--tool-call:([0-9a-f]{6,16})-->\n(.*)$",c.get("body",""),re.S)
                     if not m or m.group(1) in done: continue
