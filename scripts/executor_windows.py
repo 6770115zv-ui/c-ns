@@ -117,6 +117,11 @@ def main():
                     try: payload=json.loads(m.group(2))
                     except ValueError: continue
                     if payload.get("tool") not in {"win_powershell","win_get_environment"}: continue
+                    try:
+                        from datetime import datetime, timezone
+                        age=time.time()-datetime.strptime(c["created_at"],"%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+                    except Exception: age=0
+                    if age>600: done.add(m.group(1)); continue
                     done.add(m.group(1)); result=execute(payload)
                     api("POST","/issues/"+str(no)+"/comments",{"body":"<!--tool-result:"+m.group(1)+"-->\n"+json.dumps(result,ensure_ascii=False)})
                     last=time.time()
