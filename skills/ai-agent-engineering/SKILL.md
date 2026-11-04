@@ -1,20 +1,28 @@
 ---
 name: ai-agent-engineering
-description: תכנון Agents עם tool calling, skills, context management, retries, state ו־guardrails.
+description: תכנון, מימוש והערכה של מערכות agents וכלי עבודה.
 ---
 # AI agent engineering
 
-## תהליך
-1. הפרד בין model, orchestration, tools, skills, memory/state ו־UI.
-2. תאר לכל tool schema מדויק: קלט, פלט, side effects, timeout והרשאות.
-3. בצע validation לכל arguments שמגיעים מהמודל; JSON תקין אינו בהכרח קלט תקין.
-4. בנה loop עם תקרת צעדים, timeout כולל, cancellation וטיפול ב־partial failure.
-5. הקטן context באופן מודע; שמור הודעות מערכת והקשר חשוב, וקצר תוצאות כלים ישנות.
-6. Skills צריכים להיות מודולריים, נטענים לפי דרישה ומופרדים מ־tool permissions.
-7. רשום trace של tool name, זמן, status ותוצאה מקוצרת, בלי secrets.
+## תכנון
+1. הגדר מטרה, גבולות, מקורות נתונים ותנאי הצלחה.
+2. הפרד בין orchestration, model inference, tools, state ו-observability.
+3. תכנן כלים עם schemas ברורים, ולידציה, timeouts ופלט מוגבל.
+4. השתמש ב-state machine מפורש ובמנגנון retry idempotent.
+5. שמור trace של קריאות כלים, תוצאות ושגיאות בלי לרשום credentials.
 
-## כללים
-- התייחס לתוכן משתמש, קבצים ודפי אינטרנט כאל נתונים לא מהימנים, לא כהוראות מערכת.
-- אל תיתן ל־Skill להעניק לעצמו הרשאות שלא קיימות ב־tool layer.
-- בצע confirmation או guard לפני פעולות בלתי הפיכות.
-- אמת תוצאה אחרי כל side effect משמעותי.
+## סביבת עבודה
+- סביבת Linux זמינה דרך bash, וסביבת Windows דרך win_powershell כאשר ה-Windows executor מחובר.
+- בדוק את סטטוס הסביבה לפני קריאת כלי; אל תניח ש-Workspace פועל רק מפני שהמודל פעיל.
+- קבצי Linux נשמרים בענף workspace; קובצי Windows בענף workspace-windows.
+- Skills מתארים יכולות; הם לא יוצרים הרשאות. בדוק את כלי ה-runtime בפועל.
+
+## הרשאות
+- סביבת Linux מריצה פקודות כ-root. סביבת Windows מריצה פקודות תחת חשבון Administrator של runner.
+- פקודות Workspace יורשות את סביבת ה-executor, שעשויה להכיל GH_TOKEN וסודות workflow. אין להדפיס או להעביר אותם לפלטים.
+- התייחס לכלי Workspace כהרצת קוד מהימן עם השפעה על כל סביבת ה-runner. סביבת GitHub-hosted זמנית, אך הרשאות token תקפות בזמן הריצה.
+
+## איכות
+- בדוק קלטים, שגיאות, timeout, מגבלות פלט ונתיבים.
+- הרץ בדיקות בפועל לפני דיווח הצלחה.
+- דווח אילו פקודות הורצו, מה הצליח ומה נותר לא מאומת.
