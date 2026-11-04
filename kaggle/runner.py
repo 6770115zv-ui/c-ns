@@ -24,6 +24,7 @@ RELEASE_URL = "https://github.com/{repo}/releases/download/llama-cuda12-sm75/lla
 LLM_URL = "http://127.0.0.1:8080"
 
 MARKER = "<!--llm-reply-->"
+STREAM_MARKER = "<!--llm-streaming-->"
 STATUS_TITLE = "[worker-status]"
 EXECUTOR_TITLE = "[executor-status]"
 WINDOWS_EXECUTOR_TITLE = "[windows-executor-status]"
@@ -191,33 +192,82 @@ def start_llama(job: dict):
     return proc
 
 
-def chat_full(llm_url: str, messages, max_tokens: int, thinking: bool, tools=None, temperature: float = 0.6):
+def chat_full(llm_url: str, messages, max_tokens: int, thinking: bool, tools=None,
+              temperature: float = 0.6, on_delta=None):
     body = {
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "chat_template_kwargs": {"enable_thinking": bool(thinking)},
+        "stream": True,
     }
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
-    r = requests.post(llm_url + "/v1/chat/completions", json=body, timeout=3600)
-    if r.status_code >= 400:
-        raise RuntimeError(f"LLM HTTP {r.status_code}: {r.text[:300]}")
-    data = r.json()
-    ch = data["choices"][0]
-    msg = ch["message"]
+
+    content, reasoning = [], []
+    tool_calls = {}
+    usage, finish = {}, None
+    with requests.post(llm_url + "/v1/chat/completions", json=body,
+                       stream=True, timeout=(15, 3600)) as r:
+        if r.status_code >= 400:
+            raise RuntimeError(f"LLM HTTP {r.status_code}: {r.text[:300]}")
+        for raw in r.iter_lines(decode_unicode=True):
+            if not raw:
+                continue
+            line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                event = json.loads(payload)
+            except ValueError:
+                continue
+            if event.get("usage"):
+                usage = event["usage"]
+            choices = event.get("choices") or []
+            if not choices:
+                continue
+            choice = choices[0]
+            delta = choice.get("delta") or {}
+            piece = delta.get("content")
+            if isinstance(piece, str) and piece:
+                content.append(piece)
+            thought = delta.get("reasoning_content") or delta.get("reasoning")
+            if isinstance(thought, str) and thought:
+                reasoning.append(thought)
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                item = tool_calls.setdefault(idx, {"id": "", "type": "function",
+                                                     "function": {"name": "", "arguments": ""}})
+                if tc.get("id"):
+                    item["id"] = tc["id"]
+                if tc.get("type"):
+                    item["type"] = tc["type"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    item["function"]["name"] += fn["name"]
+                if fn.get("arguments"):
+                    item["function"]["arguments"] += fn["arguments"]
+            if choice.get("finish_reason") is not None:
+                finish = choice["finish_reason"]
+            if on_delta and (piece or thought):
+                on_delta(piece or "", thought or "")
+
     return {
-        "content": msg.get("content") or "",
-        "reasoning": msg.get("reasoning_content") or "",
-        "usage": data.get("usage", {}),
-        "finish": ch.get("finish_reason"),
-        "tool_calls": msg.get("tool_calls") or [],
+        "content": "".join(content),
+        "reasoning": "".join(reasoning),
+        "usage": usage,
+        "finish": finish,
+        "tool_calls": [tool_calls[k] for k in sorted(tool_calls)],
     }
 
 
-def chat(llm_url: str, messages, max_tokens: int, thinking: bool, temperature: float = 0.6):
-    d = chat_full(llm_url, messages, max_tokens, thinking, None, temperature)
+def chat(llm_url: str, messages, max_tokens: int, thinking: bool,
+         temperature: float = 0.6, on_delta=None):
+    d = chat_full(llm_url, messages, max_tokens, thinking, None, temperature, on_delta)
     return d["content"], d["reasoning"], d["usage"], d["finish"]
 
 
@@ -668,7 +718,7 @@ def read_skill_pack(job: dict, name: str) -> dict:
 
 
 def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinking: bool,
-               available_tools=None):
+               available_tools=None, on_delta=None):
     max_tokens = int(job.get("max_tokens", 6000))
     budget = context_budget(job)
     available_tools = available_tools if available_tools is not None else TOOLS
@@ -677,7 +727,7 @@ def agent_loop(gh: GH, number: int, msgs: list, llm_url: str, job: dict, thinkin
     steps, completion = 0, 0
     while True:
         trim_agent_context(msgs, budget)
-        d = chat_full(llm_url, msgs, max_tokens, thinking, available_tools)
+        d = chat_full(llm_url, msgs, max_tokens, thinking, available_tools, on_delta=on_delta)
         completion += int(d["usage"].get("completion_tokens", 0) or 0)
         calls = d["tool_calls"]
         if not calls:
@@ -748,14 +798,41 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
         else:
             msgs.insert(0, {"role": "system", "content": hint.strip()})
 
+    # תגובת Worker יחידה שמתעדכנת בזמן יצירת התשובה.
+    st, stream_data, _ = gh.call("POST", f"/issues/{number}/comments",
+                                 {"body": STREAM_MARKER + "⏳ המודל חושב ומתחיל לכתוב..."})
+    if st != 201:
+        raise RuntimeError(f"cannot create streaming comment HTTP {st}: {stream_data}")
+    stream_id = stream_data["id"]
+    stream_text = []
+    last_publish = [0.0]
+    last_size = [0]
+
+    def publish_stream(piece="", thought=""):
+        if piece:
+            stream_text.append(piece)
+        current = "".join(stream_text)
+        now = time.monotonic()
+        if not current or (now - last_publish[0] < 2.0 and len(current) - last_size[0] < 100):
+            return
+        status, result, _ = gh.call("PATCH", f"/issues/comments/{stream_id}",
+                                    {"body": STREAM_MARKER + current[-58000:]})
+        if status != 200:
+            print(f"[stream] update failed HTTP {status}: {result}", flush=True)
+        else:
+            last_publish[0] = now
+            last_size[0] = len(current)
+
     t0 = time.time()
-    reasoning, usage, finish, steps = "", {}, None, 0
+    reasoning, usage, finish, steps, text = "", {}, None, 0, ""
     try:
         if use_tools:
             text, reasoning, usage, finish, steps = agent_loop(
-                gh, number, msgs, llm_url, job, thinking, active_tools)
+                gh, number, msgs, llm_url, job, thinking, active_tools, publish_stream)
         else:
-            text, reasoning, usage, finish = chat(llm_url, msgs, int(job.get("max_tokens", 6000)), thinking)
+            text, reasoning, usage, finish = chat(
+                llm_url, msgs, int(job.get("max_tokens", 6000)), thinking,
+                on_delta=publish_stream)
     except Exception as e:  # noqa: BLE001
         text = f"⚠️ שגיאה בהפעלת המודל: {e}"
         finish = "error"
@@ -770,9 +847,9 @@ def reply_to(gh: GH, number: int, comments, owner: str, llm_url: str, job: dict,
     body += f"\n\n<sub>⏱ {dt:.1f}s · {usage.get('completion_tokens', '?')} tokens{extra}</sub>"
     body = body[:60000]
 
-    st, data, _ = gh.call("POST", f"/issues/{number}/comments", {"body": body})
-    if st != 201:
-        raise RuntimeError(f"post comment HTTP {st}: {data}")
+    st, data, _ = gh.call("PATCH", f"/issues/comments/{stream_id}", {"body": body})
+    if st != 200:
+        raise RuntimeError(f"finalize streaming comment HTTP {st}: {data}")
 
 
 def find_status_issue(gh: GH, title: str = STATUS_TITLE):
