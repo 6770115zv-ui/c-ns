@@ -72,7 +72,6 @@ async function handleChat(request, env) {
     var stream = await env.AI.run(model, {
       messages: modelMessages,
       stream: true,
-      max_tokens: 4096,
       temperature: 0.7
     });
 
