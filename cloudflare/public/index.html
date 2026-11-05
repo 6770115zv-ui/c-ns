@@ -45,7 +45,7 @@ button{cursor:pointer}
 .msg.user{margin-right:auto}
 .msg.assistant{margin-left:auto}
 .msg-label{font-size:11px;color:#9ca9c2;margin:0 4px 5px}
-.bubble{padding:12px 15px;border-radius:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bubble{padding:12px 15px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
 .user .bubble{background:#27375d;border:1px solid #354b7b}
 .assistant .bubble{background:#202736;border:1px solid #303a4c}
 .composer{border-top:1px solid #293143;padding:14px}
@@ -54,7 +54,7 @@ button{cursor:pointer}
 #prompt:focus{border-color:#7893ff}
 .hint{font-size:11px;color:#8f9bb2;margin-top:8px}
 .hidden{display:none!important}
-.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.68);display:none;align-items:center;justify-content:center;padding:18px}
+.modal-backdrop{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.68);display:none;align-items:center;justify-content:center;padding:18px}
 .modal{width:100%;max-width:420px;background:#1b2230;border:1px solid #39445b;border-radius:13px;padding:18px}
 .modal h3{margin:0 0 8px}
 .modal p{color:#aab4c8;font-size:13px}
@@ -227,8 +227,8 @@ button{cursor:pointer}
     if(finalChunk && pendingLine){ processLine(pendingLine); pendingLine = ""; }
   }
   function finishRequest(){
-    if(xhr && xhr.status >= 400){
-      var errorText = "שגיאת שרת (" + xhr.status + ")";
+    if(xhr && (xhr.status >= 400 || xhr.status === 0)){
+      var errorText = xhr.status === 0 ? "שגיאת רשת. בדקו את החיבור ונסו שוב." : "שגיאת שרת (" + xhr.status + ")";
       try { var err = JSON.parse(xhr.responseText); if(err.error) errorText = err.error; } catch(e){}
       appendAssistantText(errorText);
       setStatus("הבקשה נכשלה", "bad");
@@ -272,7 +272,7 @@ button{cursor:pointer}
       }
     };
     xhr.onerror = function(){
-      if(xhr){ appendAssistantText("שגיאת רשת. בדקו את החיבור ונסו שוב."); setStatus("שגיאת רשת", "bad"); finishRequest(); }
+      if(xhr){ setStatus("שגיאת רשת", "bad"); finishRequest(); }
     };
     xhr.onabort = function(){
       if(xhr){
@@ -326,7 +326,10 @@ button{cursor:pointer}
   };
   stopBtn.onclick = function(){ if(xhr) xhr.abort(); };
   byId("clearBtn").onclick = function(){
-    if(xhr) xhr.abort();
+    if(xhr){ var activeRequest = xhr; xhr = null; activeRequest.abort(); }
+    currentAssistant = null;
+    sendBtn.disabled = false;
+    stopBtn.className = "btn stop hidden";
     messages = [];
     saveMessages();
     renderMessages();
