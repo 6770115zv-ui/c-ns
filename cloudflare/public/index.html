@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111827">
+<title>AI Platform</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:#10131b;color:#edf1fa;font-family:Arial,"Segoe UI",sans-serif}
+body{font-size:15px;line-height:1.55}
+button,input,textarea{font:inherit}
+button{cursor:pointer}
+.top{height:64px;border-bottom:1px solid #293143;background:#171c28;display:flex;align-items:center;justify-content:space-between;padding:0 22px}
+.brand{font-size:19px;font-weight:bold;letter-spacing:.2px}
+.brand span{color:#8ba6ff}
+.top-actions{display:flex;gap:8px;align-items:center}
+.btn{border:1px solid #34405a;background:#222a3a;color:#edf1fa;border-radius:9px;padding:8px 13px}
+.btn:hover{background:#2d3850}
+.btn.primary{background:#526fe5;border-color:#526fe5;color:#fff}
+.btn.primary:hover{background:#405bc8}
+.btn.stop{background:#7c303b;border-color:#a64a58}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.shell{max-width:1120px;margin:0 auto;padding:20px;display:flex;gap:18px;min-height:calc(100vh - 64px)}
+.sidebar{width:235px;flex:0 0 235px}
+.panel{background:#171c28;border:1px solid #293143;border-radius:13px;padding:14px;margin-bottom:14px}
+.panel-title{font-size:13px;color:#aab4c8;font-weight:bold;margin-bottom:10px}
+.provider{display:block;width:100%;text-align:right;padding:11px;border:1px solid #303a50;background:#1e2534;color:#e9eef9;border-radius:9px;margin:7px 0}
+.provider.active{border-color:#7893ff;background:#263353}
+.provider small{display:block;color:#9ca9c2;font-size:11px;margin-top:3px}
+.provider:disabled{opacity:.55;cursor:not-allowed}
+.status{font-size:12px;color:#aab4c8;margin-top:10px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e5b34c;margin-left:6px}
+.dot.ok{background:#40c990}
+.dot.bad{background:#ee6876}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:#171c28;border:1px solid #293143;border-radius:13px;overflow:hidden;min-height:calc(100vh - 104px)}
+.chat-head{padding:13px 17px;border-bottom:1px solid #293143;display:flex;align-items:center;justify-content:space-between}
+.chat-title{font-weight:bold}
+.chat-sub{font-size:12px;color:#9ca9c2}
+.messages{padding:20px;flex:1;overflow-y:auto;min-height:300px}
+.welcome{text-align:center;color:#aab4c8;padding:55px 10px}
+.welcome h2{color:#edf1fa;font-size:22px;margin:0 0 8px}
+.msg{margin:0 0 17px;max-width:88%}
+.msg.user{margin-right:auto}
+.msg.assistant{margin-left:auto}
+.msg-label{font-size:11px;color:#9ca9c2;margin:0 4px 5px}
+.bubble{padding:12px 15px;border-radius:12px;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
+.user .bubble{background:#27375d;border:1px solid #354b7b}
+.assistant .bubble{background:#202736;border:1px solid #303a4c}
+.composer{border-top:1px solid #293143;padding:14px}
+.composer-row{display:flex;gap:9px;align-items:flex-end}
+#prompt{flex:1;resize:vertical;min-height:48px;max-height:180px;background:#101521;border:1px solid #35405a;border-radius:10px;color:#edf1fa;padding:12px;outline:none}
+#prompt:focus{border-color:#7893ff}
+.hint{font-size:11px;color:#8f9bb2;margin-top:8px}
+.hidden{display:none!important}
+.modal-backdrop{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.68);display:none;align-items:center;justify-content:center;padding:18px}
+.modal{width:100%;max-width:420px;background:#1b2230;border:1px solid #39445b;border-radius:13px;padding:18px}
+.modal h3{margin:0 0 8px}
+.modal p{color:#aab4c8;font-size:13px}
+.modal input{width:100%;padding:11px;border:1px solid #3b4965;background:#101521;color:#fff;border-radius:8px;direction:ltr}
+.modal-actions{display:flex;justify-content:flex-start;gap:8px;margin-top:12px}
+@media(max-width:760px){
+ .shell{display:block;padding:10px}
+ .sidebar{width:auto;display:flex;gap:8px;overflow-x:auto;margin-bottom:10px}
+ .sidebar .panel{min-width:190px;margin:0}
+ .main{min-height:calc(100vh - 190px)}
+ .messages{padding:13px}
+ .msg{max-width:96%}
+ .top{padding:0 12px}
+ .brand{font-size:16px}
+}
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand">AI <span>PLATFORM</span></div>
+  <div class="top-actions">
+    <button class="btn" id="settingsBtn" type="button">הגדרות</button>
+    <button class="btn" id="clearBtn" type="button">שיחה חדשה</button>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="panel">
+      <div class="panel-title">ספק AI</div>
+      <button class="provider active" type="button">Workers AI <small>פעיל · Cloudflare</small></button>
+      <button class="provider" type="button" disabled>Gemini API <small>בקרוב</small></button>
+      <button class="provider" type="button" disabled>Kaggle Worker <small>בקרוב</small></button>
+      <div class="status" id="status"><span class="dot"></span>מתחבר ל־Workers AI...</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">המודל הפעיל</div>
+      <div id="modelName">טוען...</div>
+      <div class="hint">המודל מוגדר בצד השרת ואינו חושף מפתחות API בדפדפן.</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="chat-head">
+      <div><div class="chat-title">צ'אט AI</div><div class="chat-sub">תשובות מוזרמות בזמן אמת</div></div>
+      <button class="btn stop hidden" id="stopBtn" type="button">עצור</button>
+    </div>
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <h2>ברוכים הבאים</h2>
+        <div>בחרו ספק AI והתחילו שיחה. כרגע Workers AI הוא הספק הפעיל.</div>
+      </div>
+    </div>
+    <div class="composer">
+      <div class="composer-row">
+        <textarea id="prompt" rows="2" placeholder="כתבו הודעה..."></textarea>
+        <button class="btn primary" id="sendBtn" type="button">שליחה</button>
+      </div>
+      <div class="hint">Enter לשליחה · Shift+Enter לשורה חדשה · השיחה נשמרת בדפדפן הזה</div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal">
+    <h3>הגדרות גישה</h3>
+    <p>אם הגדרת ACCESS_KEY ב־Cloudflare, הדבק כאן את מפתח הגישה. הוא נשמר רק באחסון המקומי של הדפדפן.</p>
+    <input id="accessKey" type="password" autocomplete="off" placeholder="Access key (optional)">
+    <div class="modal-actions">
+      <button class="btn primary" id="saveSettings" type="button">שמירה</button>
+      <button class="btn" id="closeSettings" type="button">סגירה</button>
+    </div>
+  </div>
+</div>
+
+<script type="text/javascript">
+(function(){
+  var messages = [];
+  var xhr = null;
+  var currentAssistant = null;
+  var responseOffset = 0;
+  var pendingLine = "";
+  var accessKey = "";
+  var storageKey = "cf-ai-platform-v1";
+  var keyStorage = "cf-ai-platform-access";
+  var messagesBox = document.getElementById("messages");
+  var promptBox = document.getElementById("prompt");
+  var sendBtn = document.getElementById("sendBtn");
+  var stopBtn = document.getElementById("stopBtn");
+  var statusBox = document.getElementById("status");
+  var modelBox = document.getElementById("modelName");
+
+  function byId(id){ return document.getElementById(id); }
+  function setStatus(text, state){
+    var cls = state === "ok" ? "dot ok" : (state === "bad" ? "dot bad" : "dot");
+    statusBox.innerHTML = '<span class="' + cls + '"></span>' + text;
+  }
+  function safeGet(key){
+    try { return window.localStorage ? localStorage.getItem(key) : null; } catch(e){ return null; }
+  }
+  function safeSet(key, value){
+    try { if(window.localStorage) localStorage.setItem(key, value); } catch(e){}
+  }
+  function saveMessages(){
+    safeSet(storageKey, JSON.stringify(messages.slice(-40)));
+  }
+  function makeMessage(role, text){
+    var wrap = document.createElement("div");
+    wrap.className = "msg " + role;
+    var label = document.createElement("div");
+    label.className = "msg-label";
+    label.appendChild(document.createTextNode(role === "user" ? "אתה" : "AI"));
+    var bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.appendChild(document.createTextNode(text || ""));
+    wrap.appendChild(label);
+    wrap.appendChild(bubble);
+    messagesBox.appendChild(wrap);
+    messagesBox.scrollTop = messagesBox.scrollHeight;
+    return bubble;
+  }
+  function renderMessages(){
+    messagesBox.innerHTML = "";
+    if(!messages.length){
+      var welcome = document.createElement("div");
+      welcome.className = "welcome";
+      welcome.innerHTML = "<h2>ברוכים הבאים</h2><div>בחרו ספק AI והתחילו שיחה. כרגע Workers AI הוא הספק הפעיל.</div>";
+      messagesBox.appendChild(welcome);
+      return;
+    }
+    var i;
+    for(i=0;i<messages.length;i++) makeMessage(messages[i].role, messages[i].content);
+  }
+  function appendAssistantText(text){
+    if(!currentAssistant) currentAssistant = makeMessage("assistant", "");
+    currentAssistant.appendChild(document.createTextNode(text));
+    messagesBox.scrollTop = messagesBox.scrollHeight;
+  }
+  function extractText(obj){
+    if(!obj) return "";
+    if(obj.choices && obj.choices.length){
+      var choice = obj.choices[0];
+      if(choice.delta && typeof choice.delta.content === "string") return choice.delta.content;
+      if(choice.message && typeof choice.message.content === "string") return choice.message.content;
+    }
+    if(typeof obj.response === "string") return obj.response;
+    if(typeof obj.text === "string") return obj.text;
+    return "";
+  }
+  function processLine(line){
+    var data;
+    var parsed;
+    if(line.indexOf("data:") !== 0) return;
+    data = line.substring(5).replace(/^\s+/, "");
+    if(!data || data === "[DONE]") return;
+    try { parsed = JSON.parse(data); } catch(e){ return; }
+    var text = extractText(parsed);
+    if(text) appendAssistantText(text);
+  }
+  function consumeProgress(finalChunk){
+    if(!xhr) return;
+    var all = xhr.responseText || "";
+    var fresh = all.substring(responseOffset);
+    responseOffset = all.length;
+    pendingLine += fresh;
+    var lines = pendingLine.split(/\r?\n/);
+    pendingLine = lines.pop();
+    var i;
+    for(i=0;i<lines.length;i++) processLine(lines[i]);
+    if(finalChunk && pendingLine){ processLine(pendingLine); pendingLine = ""; }
+  }
+  function finishRequest(){
+    if(xhr && (xhr.status >= 400 || xhr.status === 0)){
+      var errorText = xhr.status === 0 ? "שגיאת רשת. בדקו את החיבור ונסו שוב." : "שגיאת שרת (" + xhr.status + ")";
+      try { var err = JSON.parse(xhr.responseText); if(err.error) errorText = err.error; } catch(e){}
+      appendAssistantText(errorText);
+      setStatus("הבקשה נכשלה", "bad");
+    } else {
+      setStatus("מחובר ל־Workers AI", "ok");
+    }
+    if(currentAssistant){
+      var answer = currentAssistant.textContent || "";
+      messages.push({role:"assistant", content:answer || "לא התקבלה תשובה מהמודל."});
+      if(!answer) currentAssistant.appendChild(document.createTextNode("לא התקבלה תשובה מהמודל."));
+      saveMessages();
+    }
+    xhr = null;
+    currentAssistant = null;
+    sendBtn.disabled = false;
+    stopBtn.className = "btn stop hidden";
+  }
+  function sendMessage(){
+    var text = promptBox.value.replace(/^\s+|\s+$/g, "");
+    if(!text || xhr) return;
+    messages.push({role:"user", content:text});
+    saveMessages();
+    if(byId("welcome")) messagesBox.innerHTML = "";
+    makeMessage("user", text);
+    promptBox.value = "";
+    currentAssistant = null;
+    responseOffset = 0;
+    pendingLine = "";
+    sendBtn.disabled = true;
+    stopBtn.className = "btn stop";
+    setStatus("מייצר תשובה...", "");
+    xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/chat", true);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    if(accessKey) xhr.setRequestHeader("X-Access-Key", accessKey);
+    xhr.onreadystatechange = function(){
+      if(xhr && xhr.readyState === 3) consumeProgress(false);
+      if(xhr && xhr.readyState === 4){
+        consumeProgress(true);
+        finishRequest();
+      }
+    };
+    xhr.onerror = function(){
+      if(xhr){ setStatus("שגיאת רשת", "bad"); finishRequest(); }
+    };
+    xhr.onabort = function(){
+      if(xhr){
+        if(currentAssistant && currentAssistant.textContent) {
+          messages.push({role:"assistant", content:currentAssistant.textContent + "\n\n[היצירה נעצרה]"});
+          saveMessages();
+        }
+        setStatus("היצירה נעצרה", "");
+        xhr = null;
+        currentAssistant = null;
+        sendBtn.disabled = false;
+        stopBtn.className = "btn stop hidden";
+      }
+    };
+    xhr.send(JSON.stringify({messages:messages.slice(-30)}));
+  }
+  function checkHealth(){
+    var check = new XMLHttpRequest();
+    check.open("GET", "/api/health", true);
+    check.onreadystatechange = function(){
+      if(check.readyState !== 4) return;
+      if(check.status === 200){
+        try {
+          var data = JSON.parse(check.responseText);
+          modelBox.appendChild(document.createTextNode(data.model || "Workers AI"));
+          setStatus(data.requiresKey && !accessKey ? "נדרש מפתח גישה בהגדרות" : "מחובר ל־Cloudflare", data.requiresKey && !accessKey ? "bad" : "ok");
+        } catch(e){ setStatus("Cloudflare זמין", "ok"); }
+      } else {
+        modelBox.appendChild(document.createTextNode("Workers AI"));
+        setStatus("לא ניתן לבדוק את השרת", "bad");
+      }
+    };
+    check.send(null);
+  }
+
+  accessKey = safeGet(keyStorage) || "";
+  var saved = safeGet(storageKey);
+  if(saved){ try { messages = JSON.parse(saved) || []; } catch(e){ messages = []; } }
+  renderMessages();
+  checkHealth();
+
+  sendBtn.onclick = sendMessage;
+  promptBox.onkeydown = function(event){
+    event = event || window.event;
+    if(event.keyCode === 13 && !event.shiftKey){
+      if(event.preventDefault) event.preventDefault();
+      event.returnValue = false;
+      sendMessage();
+      return false;
+    }
+  };
+  stopBtn.onclick = function(){ if(xhr) xhr.abort(); };
+  byId("clearBtn").onclick = function(){
+    if(xhr){ var activeRequest = xhr; xhr = null; activeRequest.abort(); }
+    currentAssistant = null;
+    sendBtn.disabled = false;
+    stopBtn.className = "btn stop hidden";
+    messages = [];
+    saveMessages();
+    renderMessages();
+  };
+  byId("settingsBtn").onclick = function(){
+    byId("accessKey").value = accessKey;
+    byId("settingsModal").style.display = "flex";
+  };
+  byId("closeSettings").onclick = function(){ byId("settingsModal").style.display = "none"; };
+  byId("saveSettings").onclick = function(){
+    accessKey = byId("accessKey").value.replace(/^\s+|\s+$/g, "");
+    safeSet(keyStorage, accessKey);
+    byId("settingsModal").style.display = "none";
+    setStatus("ההגדרות נשמרו", "ok");
+  };
+})();
+</script>
+</body>
+</html>
