@@ -213,10 +213,10 @@ def chat_full(llm_url: str, messages, max_tokens: int, thinking: bool, tools=Non
                        stream=True, timeout=(15, 3600)) as r:
         if r.status_code >= 400:
             raise RuntimeError(f"LLM HTTP {r.status_code}: {r.text[:300]}")
-        for raw in r.iter_lines(decode_unicode=True):
+        for raw in r.iter_lines(decode_unicode=False):
             if not raw:
                 continue
-            line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw
+            line = raw.decode("utf-8", errors="replace")
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
