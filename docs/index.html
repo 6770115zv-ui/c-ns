@@ -525,15 +525,56 @@ async function pollStatus() {
 
 async function dispatch(workflow, inputs) {
   if (!S.token) { openSettings(); return false; }
-  if (!S.branch) {
-    const r = await gh('GET', repoPath(''));
-    S.branch = (r.data && r.data.default_branch) || 'main';
+
+  try {
+    // Verify repository access and read its default branch.
+    const repo = await gh('GET', repoPath(''));
+    if (repo.status !== 200) {
+      const message = repo.data?.message || 'לא ניתן לקרוא את פרטי המאגר';
+      toast(`בדיקת המאגר נכשלה (${repo.status}): ${message}`);
+      return false;
+    }
+    S.branch = repo.data.default_branch || S.branch || 'main';
+
+    // Resolve the workflow by filename before dispatching it.
+    const workflowResult = await gh(
+      'GET',
+      repoPath('/actions/workflows/' + encodeURIComponent(workflow))
+    );
+    if (workflowResult.status !== 200) {
+      const message = workflowResult.data?.message || 'GitHub לא החזיר פירוט';
+      toast(`לא ניתן למצוא את Workflow בשם ${workflow} (${workflowResult.status}): ${message}`);
+      return false;
+    }
+
+    if (workflowResult.data?.state && workflowResult.data.state !== 'active') {
+      toast(`ה-Workflow ${workflow} קיים אך אינו פעיל (state: ${workflowResult.data.state}).`);
+      return false;
+    }
+
+    const body = { ref: S.branch };
+    if (inputs) body.inputs = inputs;
+
+    const result = await gh(
+      'POST',
+      repoPath(`/actions/workflows/${workflowResult.data.id}/dispatches`),
+      body
+    );
+
+    if (result.status !== 204) {
+      const message = result.data?.message || 'GitHub לא החזיר פירוט נוסף';
+      const errors = Array.isArray(result.data?.errors)
+        ? ' — ' + result.data.errors.map(x => x.message || x.code || JSON.stringify(x)).join('; ')
+        : '';
+      toast(`הפעלת ${workflow} נכשלה (${result.status}): ${message}${errors}`);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    toast('שגיאת תקשורת מול GitHub: ' + (error?.message || String(error)));
+    return false;
   }
-  const body = { ref: S.branch };
-  if (inputs) body.inputs = inputs;
-  const r = await gh('POST', repoPath(`/actions/workflows/${workflow}/dispatches`), body);
-  if (r.status !== 204) { toast('ההפעלה נכשלה (' + r.status + '). בדוק הרשאת Actions בטוקן.'); return false; }
-  return true;
 }
 
 async function toggle(kind) {
